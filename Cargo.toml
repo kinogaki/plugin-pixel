@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+kinogaki-pixel-render = { path = "crates/pixel" }
+kinogaki-pixel-render-wgpu = { path = "crates/wgpu" }
+# The render interface: studio-sdk's leaf crate (std only; its `wgpu`
+# feature adds the display contract).
+kinogaki-render-api = { git = "https://github.com/kinogaki/studio-sdk.git", rev = "dd0155a63201134f5eb2ef4b6bd5830309f2353f" }
+# The host's GPU API, at the exact version studio-sdk pins, so the renderer
+# can share the host's device.
+wgpu = "=30.0.1"
+bytemuck = { version = "1.25", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+overflow-checks = true
+
+# BVH checks and the GPU tests' CPU references run many iterations.
+[profile.test]
+opt-level = 2

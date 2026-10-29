@@ -1,0 +1,15 @@
+[package]
+name = "kinogaki-pixel-render"
+description = "Pixel Render's host core, without a device: its engine description (settings, the Pixel Surface vocabulary, outputs), the scene a host's prims make, film, camera, BVH and dither"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+kinogaki-render-api.workspace = true
+# The BVH's and the vertices' plain-data layout, as the GPU reads them.
+bytemuck.workspace = true
