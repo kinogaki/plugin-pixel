@@ -1,0 +1,19 @@
+[package]
+name = "kinogaki-plugin-pixel"
+description = "Pixel, the realtime pixel-art renderer, as Studio's plugin renders/pixel.dylib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["dylib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# The shared crates' one build: the package and the engine cross as its types.
+kinogaki-shared.workspace = true
+kinogaki-studio-api = { workspace = true, features = ["wgpu"] }
+kinogaki-pixel-render-wgpu.workspace = true
