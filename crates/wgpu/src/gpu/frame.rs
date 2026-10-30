@@ -31,6 +31,7 @@ pub struct FrameUniform {
     bands: [f32; 4],
     bayer: [[f32; 4]; 16],
     ramp: [[f32; 4]; 16],
+    ramp_modes: [[u32; 4]; 4],
 }
 
 /// What a frame's uniform is made from.
@@ -124,6 +125,9 @@ impl FrameUniform {
             bands: [s.volume_levels as f32, s.volume_dither, 0.0, 0.0],
             bayer,
             ramp: s.shade_ramp.stops,
+            ramp_modes: std::array::from_fn(|v| {
+                std::array::from_fn(|i| s.shade_ramp.modes[v * 4 + i])
+            }),
         }
     }
 }

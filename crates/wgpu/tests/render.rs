@@ -6,6 +6,7 @@ mod support;
 
 use kinogaki_pixel_render::{Aov, Ramp, Settings, dither, shading};
 use kinogaki_pixel_render_wgpu::{Renderer, Viewport};
+use kinogaki_render_api::ramp::{Interpolation, Key};
 use support::{PLANE, SPHERE, canonical, canonical_view, device, preview, write_png};
 
 fn rendered() -> (Renderer, Viewport) {
@@ -79,8 +80,24 @@ fn canonical_scene_writes_its_aovs() {
 fn shading_matches_the_cpu_definition() {
     // The shade pass is shading::shade over the same inputs (no rim, no
     // fog): recompute the beauty from the albedo, direct, ambient and
-    // indirect outputs.
-    let (r, v) = rendered();
+    // indirect outputs, with the Shade Ramp in each interpolation.
+    for i in Interpolation::ALL {
+        let keys: Vec<Key> = kinogaki_pixel_render::settings::ramp::default_stops()
+            .into_iter()
+            .map(|k| Key {
+                interpolation: i,
+                ..k
+            })
+            .collect();
+        shades_as_the_cpu(Settings {
+            shade_ramp: Ramp::new(&keys),
+            ..Settings::default()
+        });
+    }
+}
+
+fn shades_as_the_cpu(settings: Settings) {
+    let (r, v) = rendered_with(settings);
     let s = r.settings();
     let table = dither::thresholds(s.dither);
     let albedo = v.read_aov(Aov::Albedo).unwrap();
@@ -116,7 +133,11 @@ fn shading_matches_the_cpu_definition() {
     }
     // A light exactly on a step's cut may round either way in f32.
     assert!(covered > 5000);
-    assert!(differ * 1000 <= covered, "{differ} of {covered} differ");
+    let mode = s.shade_ramp.modes[0];
+    assert!(
+        differ * 1000 <= covered,
+        "interpolation {mode}: {differ} of {covered} differ"
+    );
 }
 
 #[test]

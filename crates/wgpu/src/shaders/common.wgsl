@@ -44,8 +44,10 @@ struct Frame {
     bands: vec4<f32>,
     // The dither's thresholds, row-major, four a vector (8×8 at most).
     bayer: array<vec4<f32>, 16>,
-    // The Shade Ramp's stops: rgb, and w the position (shade.w of them).
+    // The Shade Ramp's keys: rgb, and w the position (shade.z of them).
     ramp: array<vec4<f32>, 16>,
+    // Each key's interpolation code, four a vector (ramp::Interpolation).
+    ramp_modes: array<vec4<u32>, 4>,
 }
 
 // An object table entry (geometry::Object): its material and id.

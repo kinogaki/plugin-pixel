@@ -40,22 +40,149 @@ fn quantize(value: f32, levels: f32, t: f32, strength: f32) -> f32 {
     return (base + select(0.0, 1.0, v - base > cut)) / steps;
 }
 
-// Settings::shade_ramp at level t (Ramp::at).
-fn ramp(t: f32) -> vec3<f32> {
-    let count = max(u32(frame.shade.z), 1u);
-    if t <= frame.ramp[0].w {
-        return frame.ramp[0].rgb;
+// The Shade Ramp's keys: count, position, color and interpolation code.
+fn ramp_count() -> u32 {
+    return max(u32(frame.shade.z), 1u);
+}
+fn ramp_at(k: u32) -> f32 {
+    return frame.ramp[k].w;
+}
+fn ramp_value(k: u32) -> vec3<f32> {
+    return frame.ramp[k].rgb;
+}
+fn ramp_mode(k: u32) -> u32 {
+    return frame.ramp_modes[k / 4u][k % 4u];
+}
+
+// Interpolation codes (kinogaki_render_api::ramp::Interpolation::code).
+const CONSTANT: u32 = 0u;
+const LINEAR: u32 = 1u;
+const CATMULL_ROM: u32 = 2u;
+const MONOTONE: u32 = 3u;
+const B_SPLINE: u32 = 4u;
+
+// Whether key p has a distinct key before it, or after it.
+fn ramp_before(p: u32) -> bool {
+    return p > 0u && ramp_at(p - 1u) < ramp_at(p);
+}
+fn ramp_after(p: u32) -> bool {
+    return p + 1u < ramp_count() && ramp_at(p + 1u) > ramp_at(p);
+}
+
+// The slope of the line from key p to the next.
+fn ramp_secant(p: u32) -> vec3<f32> {
+    return (ramp_value(p + 1u) - ramp_value(p)) / (ramp_at(p + 1u) - ramp_at(p));
+}
+
+// Catmull-Rom's tangent at key p: along its neighbours, flat at an end.
+fn smooth_slope(p: u32) -> vec3<f32> {
+    if !ramp_before(p) || !ramp_after(p) {
+        return vec3<f32>(0.0);
     }
-    for (var i = 1u; i < count; i++) {
-        let a = frame.ramp[i - 1u];
-        let b = frame.ramp[i];
-        if t <= b.w {
-            let span = b.w - a.w;
-            let u = select(1.0, (t - a.w) / span, span > 0.0);
-            return mix(a.rgb, b.rgb, u);
+    return (ramp_value(p + 1u) - ramp_value(p - 1u)) / (ramp_at(p + 1u) - ramp_at(p - 1u));
+}
+
+// Rust's signum: 1 for zero.
+fn signum(x: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(1.0), vec3<f32>(-1.0), x < vec3<f32>(0.0));
+}
+
+// An end key's tangent from the near and far secants (spans ns, fs), kept
+// from overshooting.
+fn end_slope(near: vec3<f32>, far: vec3<f32>, ns: f32, fs: f32) -> vec3<f32> {
+    let slope = ((2.0 * ns + fs) * near - ns * far) / (ns + fs);
+    let capped = select(slope, 3.0 * near,
+        signum(near) != signum(far) & abs(slope) > 3.0 * abs(near));
+    return select(capped, vec3<f32>(0.0), signum(slope) != signum(near));
+}
+
+// The monotone cubic's tangent at key p (Fritsch–Butland inside, a
+// shape-preserving three-point estimate at the ends).
+fn monotone_slope(p: u32) -> vec3<f32> {
+    let b = ramp_before(p);
+    let a = ramp_after(p);
+    if b && a {
+        let left = ramp_secant(p - 1u);
+        let right = ramp_secant(p);
+        let ls = ramp_at(p) - ramp_at(p - 1u);
+        let rs = ramp_at(p + 1u) - ramp_at(p);
+        let leading = 2.0 * rs + ls;
+        let trailing = rs + 2.0 * ls;
+        let slope = (leading + trailing) / (leading / left + trailing / right);
+        return select(slope, vec3<f32>(0.0), left * right <= vec3<f32>(0.0));
+    }
+    if a {
+        let near = ramp_secant(p);
+        if !ramp_after(p + 1u) {
+            return near;
+        }
+        return end_slope(near, ramp_secant(p + 1u),
+            ramp_at(p + 1u) - ramp_at(p), ramp_at(p + 2u) - ramp_at(p + 1u));
+    }
+    if b {
+        let near = ramp_secant(p - 1u);
+        if !ramp_before(p - 1u) {
+            return near;
+        }
+        return end_slope(near, ramp_secant(p - 2u),
+            ramp_at(p) - ramp_at(p - 1u), ramp_at(p - 1u) - ramp_at(p - 2u));
+    }
+    return vec3<f32>(0.0);
+}
+
+// Settings::shade_ramp at level t (Ramp::at, the SDK's Keys::evaluate_channel
+// on each channel).
+fn ramp(t: f32) -> vec3<f32> {
+    let last = ramp_count() - 1u;
+    if t <= ramp_at(0u) {
+        return ramp_value(0u);
+    }
+    if t >= ramp_at(last) {
+        return ramp_value(last);
+    }
+    // The span [lo, lo + 1] holding t.
+    var lo = 0u;
+    for (var k = 1u; k < last; k++) {
+        if ramp_at(k) <= t {
+            lo = k;
         }
     }
-    return frame.ramp[count - 1u].rgb;
+    let span = ramp_at(lo + 1u) - ramp_at(lo);
+    let u = (t - ramp_at(lo)) / span;
+    let start = ramp_value(lo);
+    let end = ramp_value(lo + 1u);
+    let u2 = u * u;
+    let u3 = u2 * u;
+    switch ramp_mode(lo) {
+        case CONSTANT: {
+            return start;
+        }
+        case CATMULL_ROM, MONOTONE: {
+            var s0 = smooth_slope(lo);
+            var s1 = smooth_slope(lo + 1u);
+            if ramp_mode(lo) == MONOTONE {
+                s0 = monotone_slope(lo);
+                s1 = monotone_slope(lo + 1u);
+            }
+            return (2.0 * u3 - 3.0 * u2 + 1.0) * start
+                + (u3 - 2.0 * u2 + u) * s0 * span
+                + (3.0 * u2 - 2.0 * u3) * end
+                + (u3 - u2) * s1 * span;
+        }
+        case B_SPLINE: {
+            // The ends are mirrored, so the curve meets the end keys.
+            let a = select(2.0 * start - end, ramp_value(max(lo, 1u) - 1u), ramp_before(lo));
+            let d = select(2.0 * end - start, ramp_value(min(lo + 2u, last)), ramp_after(lo + 1u));
+            let v = 1.0 - u;
+            return (v * v * v * a
+                + (3.0 * u3 - 6.0 * u2 + 4.0) * start
+                + (-3.0 * u3 + 3.0 * u2 + 3.0 * u + 1.0) * end
+                + u3 * d) / 6.0;
+        }
+        case LINEAR, default: {
+            return start + (end - start) * u;
+        }
+    }
 }
 
 // shading::shade on `levels`, dithered at `strength`.

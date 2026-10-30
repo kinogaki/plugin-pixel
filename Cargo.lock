@@ -352,7 +352,7 @@ dependencies = [
 [[package]]
 name = "kinogaki-render-api"
 version = "0.1.0"
-source = "git+https://github.com/kinogaki/studio-sdk.git?rev=dd0155a63201134f5eb2ef4b6bd5830309f2353f#dd0155a63201134f5eb2ef4b6bd5830309f2353f"
+source = "git+https://github.com/kinogaki/studio-sdk.git?rev=513eab2404002e6c53dea6f4d970145e9fca3c7d#513eab2404002e6c53dea6f4d970145e9fca3c7d"
 dependencies = [
  "wgpu",
 ]

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use kinogaki_render_api::{
-    Choice, ColorStop, SettingDescriptor, SettingGroup, SettingKind, SettingValue, Unit,
+    Choice, SettingDescriptor, SettingGroup, SettingKind, SettingValue, Unit,
 };
 
 use super::{Dither, Settings};
@@ -95,7 +95,7 @@ fn tip(d: SettingDescriptor, tooltip: &str) -> SettingDescriptor {
 pub fn descriptors() -> Vec<SettingDescriptor> {
     use key::*;
     let d = Settings::default();
-    let ramp: Arc<[ColorStop]> = Arc::from(super::ramp::default_stops());
+    let ramp: Arc<[kinogaki_render_api::ramp::Key]> = Arc::from(super::ramp::default_stops());
     let strength = (0.0, 1000.0);
     vec![
         // Pixels.
