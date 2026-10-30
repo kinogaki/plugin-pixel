@@ -78,11 +78,12 @@ fn float(default: f32, (min, max): (f64, f64), soft: (f64, f64), length: bool) -
     }
 }
 
-fn choice(choices: Vec<Choice>, default: Choice) -> SettingKind {
+/// A dropdown: its labels don't fit side by side as segments.
+fn menu(choices: Vec<Choice>, default: Choice) -> SettingKind {
     SettingKind::Choice {
         choices,
         default: default.name,
-        menu: false,
+        menu: true,
     }
 }
 
@@ -109,7 +110,7 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             DITHER,
             "Dither",
             PIXELS,
-            choice(Dither::ALL.map(Dither::choice).to_vec(), d.dither.choice()),
+            menu(Dither::ALL.map(Dither::choice).to_vec(), d.dither.choice()),
         ),
         row(
             DITHER_STRENGTH,
