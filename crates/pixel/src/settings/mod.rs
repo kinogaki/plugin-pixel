@@ -224,6 +224,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sample_counts_are_never_keyed() {
+        let fixed: Vec<String> = (descriptors().into_iter())
+            .filter(|d| !d.animatable)
+            .map(|d| d.name.to_string())
+            .collect();
+        assert_eq!(
+            fixed,
+            [key::GI_SAMPLES, key::VOLUME_STEPS, key::VOLUME_SHADOW_RAYS]
+        );
+    }
+
+    #[test]
     fn the_descriptors_default_to_the_settings_defaults() {
         let defaults = RenderSettings {
             values: kinogaki_render_api::settings::defaults(&descriptors()),

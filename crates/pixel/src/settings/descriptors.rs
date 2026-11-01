@@ -185,7 +185,9 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
                 int(d.gi_samples, 1, i64::from(super::MAX_GI_SAMPLES)),
             ),
             "Bounce rays a pixel traces, in a fixed pattern",
-        ),
+        )
+        // How finely the render samples, not what it shows: never keyed.
+        .animatable(false),
         tip(
             row(
                 GI_DISTANCE,
@@ -204,7 +206,8 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
                 int(d.volume_steps, 1, i64::from(super::MAX_VOLUME_STEPS)),
             ),
             "Steps a ray takes through volumes, and as many through lit fog",
-        ),
+        )
+        .animatable(false),
         tip(
             row(
                 VOLUME_MAX_DISTANCE,
@@ -224,7 +227,8 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
                 },
             ),
             "Each step traces shadow rays: light shafts and a darker inside under cover",
-        ),
+        )
+        .animatable(false),
         tip(
             row(
                 VOLUME_LEVELS,
