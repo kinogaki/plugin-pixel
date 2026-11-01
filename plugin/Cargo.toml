@@ -16,13 +16,13 @@ workspace = true
 # The shared crates' one build: the package and the engine cross as its types.
 kinogaki-shared.workspace = true
 kinogaki-studio-api = { workspace = true, features = ["wgpu"] }
+# The engine trait its description is read through (its vocabulary).
+kinogaki-render-api = { workspace = true, features = ["wgpu"] }
 kinogaki-pixel-render-wgpu.workspace = true
 
 [dev-dependencies]
 # The conformance suite's engine end: standard values rendered through
 # this engine on the GPU, against its goldens.
 kinogaki-testkit = { workspace = true, features = ["render"] }
-# The GPU device the engine is made on, through the render interface's
-# wgpu host side.
+# The GPU device the engine is made on.
 wgpu.workspace = true
-kinogaki-render-api = { workspace = true, features = ["wgpu"] }
