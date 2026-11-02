@@ -3,7 +3,6 @@
 //! [`shaders`]), which the render package's compiler compiles, and its
 //! material presets as Materials Tab makes ([`presets`]).
 use kinogaki_render_api::display::Engine;
-use kinogaki_shared as _;
 use kinogaki_studio_api::render::{presets, shaders};
 use kinogaki_studio_api::{Package, PackageId, export_package};
 
@@ -22,6 +21,7 @@ pub fn package() -> Package {
     package.with_engine(engine)
 }
 
+kinogaki_shared::link!();
 export_package!(package);
 
 #[cfg(test)]
