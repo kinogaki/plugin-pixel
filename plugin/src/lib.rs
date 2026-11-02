@@ -57,7 +57,7 @@ mod tests {
                 made.node.node_type.as_str(),
                 kinogaki_studio_api::render::MATERIAL
             );
-            let [surface] = &made.inside[..] else {
+            let [surface] = &made.inside.nodes[..] else {
                 panic!("{} starts with its surface", made.label);
             };
             assert!(surface.display, "{}", made.label);
