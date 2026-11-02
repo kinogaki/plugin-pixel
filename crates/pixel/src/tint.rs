@@ -73,6 +73,7 @@ mod tests {
 
     fn mesh(attributes: Vec<MeshAttribute>) -> RenderMesh {
         RenderMesh {
+            motion: kinogaki_render_api::Motion::none(),
             points: Arc::from(vec![
                 [0.0, 0.0, 0.0],
                 [1.0, 0.0, 0.0],

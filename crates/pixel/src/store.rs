@@ -211,7 +211,7 @@ impl Store {
 
     /// Camera prim `id`.
     pub fn camera(&self, id: PrimId) -> Option<Camera> {
-        self.cameras.get(&id).copied()
+        self.cameras.get(&id).cloned()
     }
 
     /// The surface materials, by their prim's slot (slots no surface holds
@@ -457,6 +457,7 @@ mod tests {
     fn mesh(slots: Vec<u16>, materials: Vec<PrimId>) -> Prim {
         let triangles = slots.len();
         Prim::Mesh(RenderMesh {
+            motion: kinogaki_render_api::Motion::none(),
             points: Arc::from(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
             triangles: Arc::from(vec![[0u32, 1, 2]; triangles]),
             normals: None,
@@ -601,7 +602,7 @@ mod tests {
         let dome = |intensity, visible| {
             light(standard::Light {
                 shape: Shape::Dome {
-                    texture: None,
+                    image: None,
                     ground: None,
                 },
                 color: [1.0, 0.5, 0.25],
@@ -626,7 +627,7 @@ mod tests {
             id(3),
             light(standard::Light {
                 shape: Shape::Dome {
-                    texture: None,
+                    image: None,
                     ground: Some([0.0, 1.0, 0.0]),
                 },
                 color: [0.5; 3],
@@ -723,6 +724,7 @@ mod tests {
         update.added.push((
             id(1),
             Prim::Instancer(Instancer {
+                motion: kinogaki_render_api::Motion::none(),
                 prototype: id(0),
                 transforms: Arc::from(vec![row(2.0), row(4.0)]),
                 visible: true,

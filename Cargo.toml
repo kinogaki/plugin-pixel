@@ -13,7 +13,7 @@ kinogaki-pixel-render = { path = "crates/pixel" }
 kinogaki-pixel-render-wgpu = { path = "crates/wgpu" }
 # The render interface: studio-sdk's leaf crate (std only; its `wgpu`
 # feature adds the display contract).
-kinogaki-render-api = { git = "https://github.com/kinogaki/studio-sdk.git", rev = "50597c78f5ef44308b2df8699fc85dc3c0686728" }
+kinogaki-render-api = { git = "https://github.com/kinogaki/studio-sdk.git", rev = "2312c549722d5156e2a35a71e70ad38544fb8033" }
 # The host's GPU API, at the exact version studio-sdk pins, so the renderer
 # can share the host's device.
 wgpu = "=30.0.1"

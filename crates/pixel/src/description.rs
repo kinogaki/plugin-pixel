@@ -7,8 +7,8 @@
 use std::sync::Arc;
 
 use kinogaki_render_api::{
-    AovSpec, EngineDescription, MaterialNetwork, MaterialPreset, MaterialRules, PreviewSetup,
-    PreviewSurface, PrimKind, Tint, standard,
+    AovSpec, EngineDescription, MaterialNetwork, MaterialPreset, MaterialRules, MotionSupport,
+    PreviewSetup, PreviewSurface, PrimKind, Tint, standard,
 };
 
 use crate::aov::Aov;
@@ -46,6 +46,8 @@ pub fn description() -> EngineDescription {
             .map(|a| AovSpec::new(a.output(), true))
             .collect(),
         realtime: true,
+        // A pixel-art engine draws each frame sharp.
+        motion: MotionSupport::default(),
         preview: PreviewSetup {
             // The defaults: swatches are pixel art too.
             settings: Vec::new(),

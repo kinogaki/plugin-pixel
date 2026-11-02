@@ -378,7 +378,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 [[package]]
 name = "kinogaki-geometry"
 version = "0.1.0"
-source = "git+https://github.com/kinogaki/studio-sdk.git?rev=50597c78f5ef44308b2df8699fc85dc3c0686728#50597c78f5ef44308b2df8699fc85dc3c0686728"
+source = "git+https://github.com/kinogaki/studio-sdk.git?rev=2312c549722d5156e2a35a71e70ad38544fb8033#2312c549722d5156e2a35a71e70ad38544fb8033"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -405,7 +405,7 @@ dependencies = [
 [[package]]
 name = "kinogaki-render-api"
 version = "0.1.0"
-source = "git+https://github.com/kinogaki/studio-sdk.git?rev=50597c78f5ef44308b2df8699fc85dc3c0686728#50597c78f5ef44308b2df8699fc85dc3c0686728"
+source = "git+https://github.com/kinogaki/studio-sdk.git?rev=2312c549722d5156e2a35a71e70ad38544fb8033#2312c549722d5156e2a35a71e70ad38544fb8033"
 dependencies = [
  "kinogaki-geometry",
  "wgpu",

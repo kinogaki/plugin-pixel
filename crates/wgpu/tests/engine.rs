@@ -46,6 +46,7 @@ fn waited(woken: &Receiver<()>) {
 /// A quad facing +Z, 2 units across, of material slot 0.
 fn quad(material: PrimId) -> Prim {
     Prim::Mesh(Mesh {
+        motion: kinogaki_render_api::Motion::none(),
         points: Arc::from(vec![
             [-1.0, -1.0, 0.0],
             [1.0, -1.0, 0.0],
@@ -80,7 +81,7 @@ fn scene(network: MaterialNetwork) -> SceneUpdate {
         Prim::Declared(
             Light {
                 shape: Shape::Dome {
-                    texture: None,
+                    image: None,
                     ground: None,
                 },
                 intensity: 1.0,

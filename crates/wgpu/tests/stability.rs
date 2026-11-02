@@ -39,7 +39,7 @@ fn moved(view: &View, pixels: f64) -> View {
     let film = Film::new(view.width, view.height, 4);
     let cam = CameraFrame::new(&view.camera, &film, None);
     let shift = cam.axes[0] * (pixels * cam.step * 7.0);
-    let mut out = *view;
+    let mut out = view.clone();
     for k in 0..3 {
         out.camera.transform[3][k] += shift[k] as f32;
     }

@@ -231,7 +231,7 @@ fn a_domes_ground_color_lights_by_how_far_a_surface_faces_up() {
         ..scene.clone()
     };
     for (from, want) in [([0.0, -5.0, 20.0], sky), ([0.0, 9.0, 20.0], ground)] {
-        let mut view = side;
+        let mut view = side.clone();
         view.camera.transform = look_at(from, [0.0, 2.0, 0.0]);
         let beauty = render(&empty, settings, &view)
             .read_aov(Aov::Beauty)

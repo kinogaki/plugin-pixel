@@ -42,7 +42,7 @@ use volume::VolumePass;
 
 /// What a frame looks through: the camera and the view's size in view
 /// (screen) pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct View {
     /// The camera.
     pub camera: Camera,

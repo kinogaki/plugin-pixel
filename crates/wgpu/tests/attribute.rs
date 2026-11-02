@@ -29,6 +29,7 @@ const COLOR: [f32; 3] = [0.5, 1.0, 1.0];
 /// upper left, each with its own `Cd`.
 fn quad() -> Prim {
     Prim::Mesh(Mesh {
+        motion: kinogaki_render_api::Motion::none(),
         points: Arc::from(vec![
             [-1.0, -1.0, 0.0],
             [1.0, -1.0, 0.0],

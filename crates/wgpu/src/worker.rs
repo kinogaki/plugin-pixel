@@ -210,10 +210,10 @@ impl Worker {
             if !slot.dirty || (slot.paused && slot.desc.mode != ViewMode::Final) {
                 continue;
             }
-            let camera = match slot.desc.camera {
-                ViewCamera::Free(camera) => camera,
+            let camera = match &slot.desc.camera {
+                ViewCamera::Free(camera) => camera.clone(),
                 // Waits for its camera to be sent.
-                ViewCamera::Prim(id) => match self.store.camera(id) {
+                ViewCamera::Prim(id) => match self.store.camera(*id) {
                     Some(camera) => camera,
                     None => continue,
                 },
@@ -293,7 +293,7 @@ impl Worker {
             let frame = Arc::new(Frame {
                 view,
                 generation: slot.generation,
-                desc: slot.desc,
+                desc: slot.desc.clone(),
                 width: film.view[0],
                 height: film.view[1],
                 block: film.pixel_size,
