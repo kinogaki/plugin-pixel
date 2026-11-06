@@ -25,6 +25,8 @@ pub fn description() -> EngineDescription {
         // Each pass is a whole frame; a pixel-art frame is drawn sharp, with
         // no motion blur.
         realtime: true,
+        // The outputs, its G-buffer and three display images keeping them.
+        film_bytes: 320,
         ..Capabilities::default()
     };
     EngineDescription::builder(ENGINE, "Pixel")
