@@ -16,7 +16,7 @@
 use crate::render::Gobo;
 use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, Value, ValueKind};
-use kinogaki_render_api::{Declared, PrimType, PrimTypeId, Role, SettingDescriptor, SettingGroup};
+use kinogaki_render_api::{Declared, Parameter, PrimType, PrimTypeId, Role, Section};
 use kinogaki_studio_api::ObjectKindId;
 use kinogaki_studio_api::render::DeclaredKind;
 
@@ -31,41 +31,34 @@ pub const RIM_LIGHT: PrimTypeId = PrimTypeId::declared("kinogaki.pixel.rim_light
 const GOBO: &str = "gobo";
 
 /// The gobo's parameters, under `GOBO`: a toggle, then the pattern's.
-fn gobo_params() -> Vec<SettingDescriptor> {
+fn gobo_params() -> Vec<Parameter> {
     let on = || Condition::when("gobo", true);
-    let shown = |d: SettingDescriptor| d.requires(on(), "Used with Gobo on");
+    let shown = |d: Parameter| d.requires(on(), "Used with Gobo on");
     vec![
-        SettingDescriptor::toggle(("gobo", "Gobo", GOBO), false)
-            .tooltip("Masks the light with dappled shade, as if through leaves"),
-        shown(SettingDescriptor::length(
-            ("goboScale", "Scale", GOBO),
-            (1e-3, 1e6),
-            Some((0.1, 10.0)),
-            2,
-            1.0,
-        )),
-        shown(SettingDescriptor::slider(
-            ("goboContrast", "Contrast", GOBO),
-            (0.0, 1.0),
-            (0.0, 1.0),
-            2,
-            0.5,
-        )),
-        shown(SettingDescriptor::integer(
-            ("goboSeed", "Seed", GOBO),
-            (0, 1 << 20),
-            0,
-        )),
-        shown(SettingDescriptor::new(
-            "goboOffset",
-            "Offset",
-            GOBO,
-            ValueKind::Vector {
-                components: 2,
-                number: Number::length(),
-            },
-            Value::Numbers(vec![0.0, 0.0]),
-        )),
+        Parameter::toggle("gobo", "Gobo", false)
+            .group(GOBO)
+            .help("Masks the light with dappled shade, as if through leaves"),
+        shown(
+            Parameter::length("goboScale", "Scale", (1e-3, 1e6), Some((0.1, 10.0)), 2, 1.0)
+                .group(GOBO),
+        ),
+        shown(
+            Parameter::slider("goboContrast", "Contrast", (0.0, 1.0), (0.0, 1.0), 2, 0.5)
+                .group(GOBO),
+        ),
+        shown(Parameter::integer("goboSeed", "Seed", 0, 1 << 20, 0).group(GOBO)),
+        shown(
+            Parameter::new(
+                "goboOffset",
+                "Offset",
+                ValueKind::Vector {
+                    components: 2,
+                    number: Number::length(),
+                },
+                Value::Numbers(vec![0.0, 0.0]),
+            )
+            .group(GOBO),
+        ),
     ]
 }
 
@@ -73,22 +66,22 @@ fn gobo_params() -> Vec<SettingDescriptor> {
 /// white of intensity 0.25 by default.
 fn rim_light() -> PrimType {
     let sides = vec![Choice::new("lit", "Lit"), Choice::new("all", "All")];
-    let side = SettingDescriptor::new(
+    let side = Parameter::new(
         "side",
         "Side",
-        standard::LIGHT_GROUP,
         ValueKind::choice(sides),
         standard::choice("lit"),
     )
-    .tooltip("Lit: only where direct light reaches; All: round the whole silhouette");
+    .group(standard::LIGHT_GROUP)
+    .help("Lit: only where direct light reaches; All: round the whole silhouette");
     let emission = (standard::emission_params(0.25).into_iter()).map(|mut d| {
         if &*d.name == "color" {
-            d.default = Value::Color([1.0, 0.85, 0.6]);
+            d.value = Value::Color([1.0, 0.85, 0.6]);
         }
         d
     });
     PrimType::new(RIM_LIGHT, "Rim Light", Role::Light).group(
-        SettingGroup::new(standard::LIGHT_GROUP, "Light", true),
+        Section::new(standard::LIGHT_GROUP, "Light", true),
         [side].into_iter().chain(emission).collect(),
     )
 }
@@ -96,7 +89,7 @@ fn rim_light() -> PrimType {
 /// Pixel's light types, in the order menus list them: the standard ones (a
 /// Gobo on distant lights and spots), then the rim light.
 pub fn light_types() -> Vec<PrimType> {
-    let gobo = || SettingGroup::new(GOBO, "Gobo", false).open_when(Condition::when("gobo", true));
+    let gobo = || Section::new(GOBO, "Gobo", false).open_when(Condition::when("gobo", true));
     (standard::lights().into_iter())
         .map(|ty| match ty.id {
             standard::DISTANT_LIGHT | standard::SPOT_LIGHT => ty.group(gobo(), gobo_params()),

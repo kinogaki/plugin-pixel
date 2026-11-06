@@ -7,7 +7,7 @@ use crate::render::settings::{MAX_GI_SAMPLES, MAX_LEVELS, MAX_VOLUME_STEPS, Sett
 use kinogaki_render_api::settings::fit;
 use kinogaki_render_api::value::ramp::{Interpolation, Key};
 use kinogaki_render_api::value::{Choice, Parameters, ParametersExt, Ramp, Value, ValueKind};
-use kinogaki_render_api::{SettingDescriptor, SettingGroup, standard};
+use kinogaki_render_api::{Parameter, Section, standard};
 
 const PIXELS: &str = "pixels";
 const OCCLUSION: &str = "occlusion";
@@ -15,8 +15,8 @@ const BOUNCE: &str = "gi";
 const VOLUMES: &str = "volumes";
 
 /// The settings' groups, in order.
-pub fn groups() -> Vec<SettingGroup> {
-    let group = |name, label| SettingGroup::new(name, label, true);
+pub fn groups() -> Vec<Section> {
+    let group = |name, label| Section::new(name, label, true);
     vec![
         group(PIXELS, "Pixels"),
         group(OCCLUSION, "Ambient Occlusion"),
@@ -48,123 +48,121 @@ fn default_ramp() -> Ramp {
 }
 
 /// The settings, in the order a Render Output lists them.
-pub fn descriptors() -> Vec<SettingDescriptor> {
-    let levels = (2, i64::from(MAX_LEVELS));
+pub fn descriptors() -> Vec<Parameter> {
+    let most = i64::from(MAX_LEVELS);
     let dithers = DITHERS
         .map(|(_, key, label)| Choice::new(key, label))
         .to_vec();
     vec![
-        SettingDescriptor::integer(("pixel_size", "Pixel Size", PIXELS), (1, 64), 4)
-            .tooltip("View pixels a film pixel covers"),
-        SettingDescriptor::integer(("shade_levels", "Shade Levels", PIXELS), levels, 4),
-        SettingDescriptor::new(
+        Parameter::integer("pixel_size", "Pixel Size", 1, 64, 4)
+            .group(PIXELS)
+            .help("View pixels a film pixel covers"),
+        Parameter::integer("shade_levels", "Shade Levels", 2, most, 4).group(PIXELS),
+        Parameter::new(
             "dither",
             "Dither",
-            PIXELS,
             ValueKind::choice(dithers),
             standard::choice("bayer4"),
-        ),
-        SettingDescriptor::slider(
-            ("dither_strength", "Dither Strength", PIXELS),
+        )
+        .group(PIXELS),
+        Parameter::slider(
+            "dither_strength",
+            "Dither Strength",
             (0.0, 1.0),
             (0.0, 1.0),
             3,
             1.0,
-        ),
-        SettingDescriptor::new(
+        )
+        .group(PIXELS),
+        Parameter::new(
             "shade_ramp",
             "Shade Ramp",
-            PIXELS,
             ValueKind::Ramp {
                 color: true,
                 most: None,
             },
             Value::Ramp(default_ramp()),
         )
-        .tooltip("The color of each shade level, darkest to brightest"),
-        SettingDescriptor::length(
-            ("ao_distance", "AO Distance", OCCLUSION),
+        .group(PIXELS)
+        .help("The color of each shade level, darkest to brightest"),
+        Parameter::length(
+            "ao_distance",
+            "AO Distance",
             (0.0, 1e6),
             Some((0.0, 10.0)),
             2,
             1.0,
         )
-        .tooltip("How far ambient occlusion looks"),
-        SettingDescriptor::slider(
-            ("ao_strength", "AO Strength", OCCLUSION),
-            (0.0, 1.0),
-            (0.0, 1.0),
-            3,
-            1.0,
-        )
-        .tooltip("How dark occluded places go: 0 ignores AO, 1 applies all of it"),
-        SettingDescriptor::slider(
-            ("ao_power", "AO Power", OCCLUSION),
-            (0.1, 8.0),
-            (0.25, 4.0),
-            3,
-            1.0,
-        )
-        .tooltip("AO's contrast: above 1 darkens partly open places more"),
-        SettingDescriptor::slider(
-            ("ao_direct", "AO on Direct", OCCLUSION),
-            (0.0, 1.0),
-            (0.0, 1.0),
-            3,
-            0.0,
-        )
-        .tooltip("How much AO also darkens direct light, for contact shadows in dense foliage"),
-        SettingDescriptor::slider(("gi", "GI", BOUNCE), (0.0, 1000.0), (0.0, 4.0), 3, 1.0)
-            .tooltip("Scales one bounce of light off nearby surfaces; 0 turns it off"),
-        SettingDescriptor::integer(
-            ("gi_samples", "GI Samples", BOUNCE),
-            (1, i64::from(MAX_GI_SAMPLES)),
-            16,
-        )
-        .tooltip("Bounce rays a pixel traces, in a fixed pattern")
-        .animatable(false),
-        SettingDescriptor::length(
-            ("gi_distance", "GI Distance", BOUNCE),
+        .group(OCCLUSION)
+        .help("How far ambient occlusion looks"),
+        Parameter::slider("ao_strength", "AO Strength", (0.0, 1.0), (0.0, 1.0), 3, 1.0)
+            .group(OCCLUSION)
+            .help("How dark occluded places go: 0 ignores AO, 1 applies all of it"),
+        Parameter::slider("ao_power", "AO Power", (0.1, 8.0), (0.25, 4.0), 3, 1.0)
+            .group(OCCLUSION)
+            .help("AO's contrast: above 1 darkens partly open places more"),
+        Parameter::slider("ao_direct", "AO on Direct", (0.0, 1.0), (0.0, 1.0), 3, 0.0)
+            .group(OCCLUSION)
+            .help("How much AO also darkens direct light, for contact shadows in dense foliage"),
+        Parameter::slider("gi", "GI", (0.0, 1000.0), (0.0, 4.0), 3, 1.0)
+            .group(BOUNCE)
+            .help("Scales one bounce of light off nearby surfaces; 0 turns it off"),
+        Parameter::integer("gi_samples", "GI Samples", 1, i64::from(MAX_GI_SAMPLES), 16)
+            .group(BOUNCE)
+            .help("Bounce rays a pixel traces, in a fixed pattern")
+            .animatable(false),
+        Parameter::length(
+            "gi_distance",
+            "GI Distance",
             (0.0, 1e6),
             Some((0.0, 20.0)),
             2,
             4.0,
         )
-        .tooltip("How far bounce rays look"),
-        SettingDescriptor::integer(
-            ("volume_steps", "Volume Steps", VOLUMES),
-            (1, i64::from(MAX_VOLUME_STEPS)),
+        .group(BOUNCE)
+        .help("How far bounce rays look"),
+        Parameter::integer(
+            "volume_steps",
+            "Volume Steps",
+            1,
+            i64::from(MAX_VOLUME_STEPS),
             24,
         )
-        .tooltip("Steps a ray takes through volumes, and as many through lit fog")
+        .group(VOLUMES)
+        .help("Steps a ray takes through volumes, and as many through lit fog")
         .animatable(false),
-        SettingDescriptor::length(
-            ("volume_max_distance", "Volume Max Distance", VOLUMES),
+        Parameter::length(
+            "volume_max_distance",
+            "Volume Max Distance",
             (0.0, 1e6),
             Some((0.0, 500.0)),
             2,
             100.0,
         )
-        .tooltip("How far from the camera volumes and lit fog are marched"),
-        SettingDescriptor::new(
+        .group(VOLUMES)
+        .help("How far from the camera volumes and lit fog are marched"),
+        Parameter::new(
             "volume_shadow_rays",
             "Volume Shadow Rays",
-            VOLUMES,
             ValueKind::Toggle,
             true,
         )
-        .tooltip("Each step traces shadow rays: light shafts and a darker inside under cover")
+        .group(VOLUMES)
+        .help("Each step traces shadow rays: light shafts and a darker inside under cover")
         .animatable(false),
-        SettingDescriptor::integer(("volume_levels", "Volume Levels", VOLUMES), levels, 12)
-            .tooltip("Levels of the opacity and light of volumes and fog"),
-        SettingDescriptor::slider(
-            ("volume_dither", "Volume Dither", VOLUMES),
+        Parameter::integer("volume_levels", "Volume Levels", 2, most, 12)
+            .group(VOLUMES)
+            .help("Levels of the opacity and light of volumes and fog"),
+        Parameter::slider(
+            "volume_dither",
+            "Volume Dither",
             (0.0, 1.0),
             (0.0, 1.0),
             3,
             0.25,
         )
-        .tooltip("Dither on volumes and fog: below 1 only the bands' edges dither"),
+        .group(VOLUMES)
+        .help("Dither on volumes and fog: below 1 only the bands' edges dither"),
     ]
 }
 

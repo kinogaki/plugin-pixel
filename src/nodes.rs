@@ -17,8 +17,7 @@
 use crate::render::{Medium, Surface};
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
-    Input, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, SettingDescriptor,
-    SettingGroup,
+    Input, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, Parameter, Section,
 };
 use kinogaki_studio_api::NodeTypeId;
 use std::sync::Arc;
@@ -41,7 +40,7 @@ fn value(
     kind: ValueKind,
     default: impl Into<Value>,
 ) -> Input {
-    Input::Setting(SettingDescriptor::new(name, label, group, kind, default))
+    Input::Setting(Parameter::new(name, label, kind, default).group(group))
 }
 
 /// A slider over `min..=max` dragged over `soft`, with `decimals`.
@@ -54,7 +53,7 @@ fn tip(input: Input, tooltip: &str, decimals: u8) -> Input {
     match input {
         Input::Setting(d) => {
             let look = NumberLook::slider().decimals(decimals).speed(0.01);
-            Input::Setting(d.tooltip(tooltip).look(look))
+            Input::Setting(d.help(tooltip).look(look))
         }
         other => other,
     }
@@ -100,7 +99,7 @@ fn surface() -> NodeDef {
     def.aliases = ["pixel", "material", "surface", "flat", "toon", "sprite"]
         .map(Arc::from)
         .to_vec();
-    def.groups = vec![SettingGroup::new(MAIN, "Surface", true)];
+    def.groups = vec![Section::new(MAIN, "Surface", true)];
     def
 }
 
@@ -203,9 +202,9 @@ fn volume() -> NodeDef {
     .map(Arc::from)
     .to_vec();
     def.groups = vec![
-        SettingGroup::new(MAIN, "Volume", true),
-        SettingGroup::new(EMISSION, "Emission", false),
-        SettingGroup::new(NOISE, "Noise", false),
+        Section::new(MAIN, "Volume", true),
+        Section::new(EMISSION, "Emission", false),
+        Section::new(NOISE, "Noise", false),
     ];
     def
 }
