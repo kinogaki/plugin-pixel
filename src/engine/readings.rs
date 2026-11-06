@@ -3,17 +3,11 @@
 //! each film pixel a pixel-size block, as the display images show it.
 use crate::gpu::{Renderer, Targets, readback};
 use crate::outputs::Output;
-use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::geometry::Error;
+use kinogaki_render_api::thread::Reading;
 use kinogaki_render_api::value::{Parameters, Value};
-use kinogaki_render_api::{
-    AovDesc, AovFormat, Deliver, FinalOutputs, PreviewImage, PreviewScene, ViewCamera, ViewDesc,
-    ViewId, ViewMode,
-};
+use kinogaki_render_api::{FinalOutputs, PreviewScene, ViewCamera, ViewDesc, ViewMode};
 use std::sync::Arc;
-
-/// The preview's view, apart from a host's.
-pub const PREVIEW: ViewId = ViewId(u32::MAX);
 
 /// Film pixels across a swatch.
 const SWATCH_PIXELS: u32 = 64;
@@ -31,14 +25,6 @@ pub fn preview_view(scene: &PreviewScene, side: u32) -> ViewDesc {
         mode: ViewMode::Final,
         values: Arc::new(values),
     }
-}
-
-/// A read waiting for its view's frame.
-pub enum Reading {
-    /// A final render's outputs.
-    Outputs(Vec<AovDesc>, Deliver<FinalOutputs>),
-    /// A preview's beauty.
-    Preview(Deliver<PreviewImage>),
 }
 
 /// `film` (`channels` values a film pixel over `size` film pixels) at view
@@ -61,65 +47,35 @@ fn upscaled(
     out.into()
 }
 
-impl Reading {
-    /// Whether someone still waits for it.
-    pub fn wanted(&self) -> bool {
-        match self {
-            Reading::Outputs(_, deliver) => deliver.wanted(),
-            Reading::Preview(deliver) => deliver.wanted(),
-        }
-    }
-
-    /// Reads `targets` (the view's newest frame, of `desc`) and hands the
-    /// result over; fails when the view has no film.
-    pub fn answer(
-        self,
-        renderer: &Renderer,
-        targets: Option<&Targets>,
-        desc: &ViewDesc,
-        pixel_size: u32,
-    ) {
-        let wanted = match &self {
-            Reading::Outputs(outputs, _) => outputs.clone(),
-            Reading::Preview(_) => vec![AovDesc {
-                aov: aovs::beauty(),
-                format: AovFormat::F32,
-            }],
-        };
-        let Some(targets) = targets else {
-            let why = Error::invalid("the view rendered no film");
-            return match self {
-                Reading::Outputs(_, deliver) => deliver.fail(why),
-                Reading::Preview(deliver) => deliver.fail(why),
-            };
-        };
-        let view = [desc.width, desc.height];
-        let planes = (wanted.into_iter())
-            .filter_map(|d| {
-                let output = Output::of_id(&d.aov.id)?;
-                let texture = &targets.of(output).texture;
-                let channels = d.aov.channels();
-                let film = readback::floats(renderer.device(), renderer.queue(), texture, channels);
-                let plane = upscaled(&film, channels, targets.film.size, view, pixel_size);
-                Some((d, plane))
-            })
-            .collect::<Vec<_>>();
-        match self {
-            Reading::Outputs(_, deliver) => deliver.deliver(FinalOutputs {
-                width: view[0],
-                height: view[1],
-                planes,
-                names: Vec::new(),
-            }),
-            Reading::Preview(deliver) => match planes.into_iter().next() {
-                Some((_, pixels)) => deliver.deliver(PreviewImage {
-                    side: desc.width,
-                    pixels,
-                }),
-                None => deliver.fail(Error::invalid("the preview has no beauty")),
-            },
-        }
-    }
+/// Answers `reading` from `targets` (the view's newest frame, of `desc`);
+/// fails when the view has no film.
+pub fn answer(
+    reading: Reading,
+    renderer: &Renderer,
+    targets: Option<&Targets>,
+    desc: &ViewDesc,
+    pixel_size: u32,
+) {
+    let Some(targets) = targets else {
+        return reading.fail(Error::invalid("the view rendered no film"));
+    };
+    let view = [desc.width, desc.height];
+    let planes = (reading.outputs().into_iter())
+        .filter_map(|d| {
+            let output = Output::of_id(&d.aov.id)?;
+            let texture = &targets.of(output).texture;
+            let channels = d.aov.channels();
+            let film = readback::floats(renderer.device(), renderer.queue(), texture, channels);
+            let plane = upscaled(&film, channels, targets.film.size, view, pixel_size);
+            Some((d, plane))
+        })
+        .collect::<Vec<_>>();
+    reading.deliver(FinalOutputs {
+        width: view[0],
+        height: view[1],
+        planes,
+        names: Vec::new(),
+    });
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //! one wake a frame, the grid locked to the view, the shade levels, a
 //! material's new color, views sharing a scene, final outputs, previews,
 //! the film a compositor reads, and a dropped read.
-use super::support::{at, pixel, scene, surface, view};
+use super::support::{LIMIT, at, pixel, scene, surface, view};
 use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::geometry::Vec3;
 use kinogaki_render_api::standard::{Light, Shape as LightShape};
@@ -23,7 +23,7 @@ fn a_change_renders_one_frame_and_rest_renders_none() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
     assert_eq!(
         (frame.width, frame.height, frame.pixels.len()),
@@ -75,7 +75,7 @@ fn the_light_falls_on_the_shade_levels() {
         ("gi", Value::Number(0.0)),
     ];
     engine.view(ViewId(1), view(64, 48, eye(), &flat));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
     // Two levels without dither: every surface pixel's light is on a level
     // (the ramp's darkest, its brightest, or brighter in the same steps), ×
@@ -104,7 +104,9 @@ fn a_new_color_renders_again_and_views_share_the_scene() {
             &[("pixel_size", Value::Integer(2))],
         ),
     );
-    waiter.until(|| engine.latest(ViewId(1)).is_some() && engine.latest(ViewId(2)).is_some());
+    waiter.until(LIMIT, || {
+        engine.latest(ViewId(1)).is_some() && engine.latest(ViewId(2)).is_some()
+    });
     let before = engine.latest(ViewId(1)).unwrap();
     let blue = SceneUpdate {
         changed: vec![Change::new(
@@ -119,7 +121,7 @@ fn a_new_color_renders_again_and_views_share_the_scene() {
     };
     let shown = [ViewId(1), ViewId(2)].map(|v| engine.latest(v).unwrap().generation);
     engine.update(blue);
-    waiter.until(|| {
+    waiter.until(LIMIT, || {
         let views = [ViewId(1), ViewId(2)].into_iter().zip(shown);
         views
             .into_iter()
@@ -148,7 +150,7 @@ fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
         ask(aovs::DEPTH, AovFormat::F32),
         ask("objectId", AovFormat::U32),
     ];
-    let outputs = waiter.take(&engine.finish(ViewId(1), &asked));
+    let outputs = waiter.take(&engine.finish(ViewId(1), &asked), LIMIT);
     assert_eq!(
         (outputs.width, outputs.height, outputs.planes.len()),
         (64, 48, 4)
@@ -170,7 +172,7 @@ fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
     drop(engine.finish(ViewId(1), &asked));
     let gone = engine.finish(ViewId(9), &asked);
     let mut outcome = None;
-    waiter.until(|| {
+    waiter.until(LIMIT, || {
         outcome = gone.take();
         outcome.is_some()
     });
@@ -194,12 +196,12 @@ fn a_preview_is_a_swatch_of_the_material() {
         lighting: PreviewLighting::Studio,
         side: 64,
     };
-    let picture = waiter.take(&engine.preview(request(red.network.clone())));
+    let picture = waiter.take(&engine.preview(request(red.network.clone())), LIMIT);
     assert_eq!((picture.side, picture.pixels.len()), (64, 64 * 64 * 4));
     let middle = &picture.pixels[(32 * 64 + 32) * 4..][..4];
     assert!(middle[0] > middle[1] * 2.0, "red: {middle:?}");
     // A second request replaces the first one's scene.
-    let picture = waiter.take(&engine.preview(request(Arc::default())));
+    let picture = waiter.take(&engine.preview(request(Arc::default())), LIMIT);
     let middle = &picture.pixels[(32 * 64 + 32) * 4..][..4];
     assert!(
         middle[1] > middle[0] * 0.6,
@@ -213,7 +215,7 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     let (mut engine, mut display, waiter, _device) = pixel();
     engine.update(scene());
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
     let shown = display.acquire(&frame).expect("the shown image");
     assert_eq!(shown.frame().generation, frame.generation);
@@ -230,7 +232,7 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     assert!(film.image("albedo").is_none(), "kept from a later frame on");
     drop(film);
     // Asking for it rendered the view again, keeping the albedo.
-    waiter.until(|| {
+    waiter.until(LIMIT, || {
         engine
             .latest(ViewId(1))
             .is_some_and(|f| !Arc::ptr_eq(&f, &frame))
@@ -248,7 +250,7 @@ fn a_final_read_through_a_camera_gone_fails() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let mut gone = view(32, 32, eye(), &[]);
     gone.camera = kinogaki_render_api::ViewCamera::Prim(kinogaki_render_api::Id::of(PrimId {
         slot: 99,
@@ -261,7 +263,7 @@ fn a_final_read_through_a_camera_gone_fails() {
     };
     let read = engine.finish(ViewId(1), &[beauty]);
     let mut outcome = None;
-    waiter.until(|| {
+    waiter.until(LIMIT, || {
         outcome = read.take();
         outcome.is_some()
     });
@@ -276,11 +278,11 @@ fn a_dropped_views_kept_outputs_go_with_it() {
     let (mut engine, mut display, waiter, _device) = pixel();
     engine.update(scene());
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let albedo = engine.description().aov("albedo").cloned().unwrap();
     let first = engine.latest(ViewId(1)).unwrap();
     drop(display.acquire_film(&first, std::slice::from_ref(&albedo)));
-    waiter.until(|| {
+    waiter.until(LIMIT, || {
         (engine.latest(ViewId(1)))
             .and_then(|f| display.acquire_film(&f, std::slice::from_ref(&albedo)))
             .is_some_and(|film| film.image("albedo").is_some())
@@ -288,7 +290,7 @@ fn a_dropped_views_kept_outputs_go_with_it() {
     engine.drop_view(ViewId(1));
     display.drop_view(ViewId(1));
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
-    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
     let film = display.acquire_film(&frame, &[albedo]).expect("the film");
     assert!(

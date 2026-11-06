@@ -8,85 +8,20 @@ use kinogaki_render_api::geometry::{Column, Sampled, Vec3, Xform};
 use kinogaki_render_api::standard::{Light, Shape as LightShape};
 use kinogaki_render_api::value::{Parameters, Value};
 use kinogaki_render_api::{
-    Camera, Id, Material, MaterialNetwork, Pending, Prim, PrimId, RenderEngine, SceneUpdate, Shape,
-    Subsets, Topology, ViewCamera, ViewDesc, ViewMode, Wake,
+    Camera, Id, Material, MaterialNetwork, Prim, PrimId, RenderEngine, SceneUpdate, Shape, Subsets,
+    Topology, ViewCamera, ViewDesc, ViewMode,
 };
-use std::future::Future;
-use std::sync::{Arc, Condvar, Mutex};
-use std::task::{Context, Poll, Waker};
-use std::time::{Duration, Instant};
+use kinogaki_studio_api_testing::engine::{self, Waiter};
+use std::sync::Arc;
+use std::time::Duration;
 
-/// `future`'s output, polled to completion (wgpu's requests resolve without
-/// a runtime).
-fn ready<F: Future>(future: F) -> F::Output {
-    let mut future = std::pin::pin!(future);
-    let mut cx = Context::from_waker(Waker::noop());
-    loop {
-        if let Poll::Ready(v) = future.as_mut().poll(&mut cx) {
-            return v;
-        }
-        std::thread::yield_now();
-    }
-}
+/// How long a test waits for Pixel.
+pub const LIMIT: Duration = Duration::from_secs(60);
 
 /// This machine's GPU, its turn taken for the test's thread.
 pub fn device() -> (wgpu::Device, wgpu::Queue) {
     kinogaki_gpu_turns::share();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let options = wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        ..Default::default()
-    };
-    let adapter = ready(instance.request_adapter(&options)).expect("a GPU adapter");
-    ready(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a device")
-}
-
-/// Wakes counted, and a way to wait for them.
-#[derive(Clone, Default)]
-pub struct Waiter {
-    state: Arc<(Mutex<u64>, Condvar)>,
-}
-
-impl Waiter {
-    /// The engine's wake.
-    pub fn wake(&self) -> Wake {
-        let state = self.state.clone();
-        Arc::new(move || {
-            *state.0.lock().unwrap() += 1;
-            state.1.notify_all();
-        })
-    }
-
-    /// Wakes so far.
-    pub fn count(&self) -> u64 {
-        *self.state.0.lock().unwrap()
-    }
-
-    /// Waits (a minute at most) until `done` holds, asking after each wake.
-    pub fn until(&self, mut done: impl FnMut() -> bool) {
-        let start = Instant::now();
-        let mut guard = self.state.0.lock().unwrap();
-        while !done() {
-            let left = Duration::from_secs(60).saturating_sub(start.elapsed());
-            assert!(!left.is_zero(), "timed out waiting for Pixel");
-            guard = self
-                .state
-                .1
-                .wait_timeout(guard, left.min(Duration::from_millis(50)))
-                .unwrap()
-                .0;
-        }
-    }
-
-    /// `pending`'s outcome, once resolved.
-    pub fn take<T>(&self, pending: &Pending<T>) -> T {
-        let mut out = None;
-        self.until(|| {
-            out = pending.take();
-            out.is_some()
-        });
-        out.unwrap().expect("an outcome")
-    }
+    engine::device()
 }
 
 /// Pixel on this machine's GPU, its frames carrying their pixels.

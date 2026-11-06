@@ -1,9 +1,9 @@
 //! The render thread: it applies the scene's updates, renders each view that
 //! needs a frame into a free display image, publishes it once the GPU has
 //! finished it, and answers final reads and previews.
-use super::Message;
-use super::display::{IMAGES, Ring, Shared, image_key, lock};
-use super::readings::{PREVIEW, Reading, preview_view};
+use super::display::{IMAGES, Ring, Shared, image_key};
+use super::readings::answer;
+use super::{Message, Own};
 use crate::gpu::{Image, Renderer, Viewport, readback};
 use crate::outputs::Output;
 use crate::render::film::Film;
@@ -11,9 +11,10 @@ use crate::render::settings::Settings;
 use crate::sync::Sync;
 use kinogaki_render_api::display::wgpu;
 use kinogaki_render_api::geometry::Diagnostic;
-use kinogaki_render_api::{Frame, PrimId, RenderStats, SceneUpdate, ViewDesc, ViewId, Wake};
+use kinogaki_render_api::thread::{Mailbox, PREVIEW, Published, Reading, lock};
+use kinogaki_render_api::{Frame, RenderStats, SceneUpdate, ViewDesc, ViewId, Wake};
 use std::collections::BTreeMap;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
 
 /// One view as the render thread keeps it.
@@ -40,15 +41,16 @@ pub(super) struct Worker {
     renderer: Renderer,
     sync: Sync,
     shared: Arc<Mutex<Shared>>,
+    /// What it publishes: given once it runs.
+    published: Arc<Mutex<Published>>,
     wake: Wake,
-    read_pixels: bool,
+    /// Frames carry their pixels.
+    pub(super) read_pixels: bool,
     /// Updates not applied yet, folded into one.
     pending: Option<SceneUpdate>,
     views: BTreeMap<ViewId, View>,
     focused: Option<ViewId>,
     readings: Vec<(ViewId, Reading)>,
-    /// The prims the last preview added.
-    previewed: Vec<PrimId>,
     /// Display image sets made so far.
     sets: u64,
     /// What the scene can't render as sent, reported with the next frame;
@@ -64,19 +66,18 @@ impl Worker {
         queue: &wgpu::Queue,
         shared: Arc<Mutex<Shared>>,
         wake: Wake,
-        read_pixels: bool,
     ) -> Worker {
         Worker {
             renderer: Renderer::new(device, queue),
             sync: Sync::default(),
             shared,
+            published: Arc::default(),
             wake,
-            read_pixels,
+            read_pixels: false,
             pending: None,
             views: BTreeMap::new(),
             focused: None,
             readings: Vec::new(),
-            previewed: Vec::new(),
             sets: 0,
             problems: Vec::new(),
             said: Vec::new(),
@@ -84,7 +85,9 @@ impl Worker {
     }
 
     /// Runs until the engine stops or is dropped.
-    pub fn run(&mut self, receiver: &Receiver<Message>) {
+    pub fn run(&mut self, mailbox: Mailbox<Own>) {
+        self.published = mailbox.published;
+        let receiver = mailbox.receiver;
         loop {
             let first = match self.has_work() {
                 true => match receiver.try_recv() {
@@ -113,9 +116,9 @@ impl Worker {
     /// Whether something can be done without a message: a view to render
     /// into a free image, or a read whose frame is done.
     fn has_work(&self) -> bool {
-        let shared = lock(&self.shared);
+        let (shared, published) = (lock(&self.shared), lock(&self.published));
         let renders = (self.views.iter()).any(|(id, v)| {
-            let newest = shared.frames.get(id);
+            let newest = published.latest(*id);
             let free = (shared.rings.get(id)).is_none_or(|r| r.free(newest).is_some());
             v.dirty && !v.paused && free
         });
@@ -141,22 +144,8 @@ impl Worker {
                 }
             }
             Message::Focus(id) => self.focused = Some(id),
-            Message::Finish(id, outputs, deliver) => {
-                self.readings.push((id, Reading::Outputs(outputs, deliver)))
-            }
-            Message::Preview(request, deliver) => {
-                let scene = request.scene();
-                let removed = std::mem::take(&mut self.previewed);
-                self.previewed = scene.update.added.iter().map(|(id, _)| *id).collect();
-                let view = preview_view(&scene, request.side);
-                self.queue(SceneUpdate {
-                    removed,
-                    ..scene.update
-                });
-                self.set_view(PREVIEW, view);
-                self.readings.push((PREVIEW, Reading::Preview(deliver)));
-            }
-            Message::Keep(id, kept) => {
+            Message::Read(id, reading) => self.readings.push((id, reading)),
+            Message::Engine(Own::Keep(id, kept)) => {
                 if let Some(v) = self.views.get_mut(&id) {
                     v.kept = kept;
                     v.dirty = true;
@@ -193,7 +182,7 @@ impl Worker {
                     viewport,
                     generation: 0,
                     filmed: None,
-                    drops: shared.drops(id),
+                    drops: lock(&self.published).drops(id),
                     dirty: true,
                     paused: false,
                     kept: shared.kept.get(&id).cloned().unwrap_or_default(),
@@ -248,13 +237,10 @@ impl Worker {
         };
         let Some(camera) = self.sync.camera(&view.desc.camera) else {
             view.dirty = false;
-            let mut shared = lock(&self.shared);
-            shared.problems.insert(
-                id,
-                Diagnostic::error("the view's camera isn't in the scene"),
-            );
-            drop(shared);
-            (self.wake)();
+            let why = Diagnostic::error("the view's camera isn't in the scene");
+            if lock(&self.published).fail(id, why, view.drops) {
+                (self.wake)();
+            }
             return;
         };
         let size = [view.desc.width, view.desc.height];
@@ -288,7 +274,7 @@ impl Worker {
                 .collect();
             shared.rings.insert(id, Ring::new(self.sets, images));
         }
-        let newest = shared.frames.get(&id).cloned();
+        let newest = lock(&self.published).latest(id).cloned();
         let ring = shared.rings.get_mut(&id).expect("a ring");
         let Some(at) = ring.free(newest.as_ref()) else {
             return;
@@ -338,19 +324,18 @@ impl Worker {
             },
         });
         let mut shared = lock(&self.shared);
-        if shared.drops(id) != view.drops {
-            // Dropped while it rendered: its frame is no one's, its problems
-            // the next one's.
-            self.problems.clone_from(&frame.stats.problems);
-            return;
-        }
         if let Some(ring) = shared.rings.get_mut(&id).filter(|r| r.set == set) {
             ring.holds[at] = Some(frame.clone());
         }
-        shared.frames.insert(id, frame);
-        shared.problems.remove(&id);
         drop(shared);
-        (self.wake)();
+        let problems = frame.stats.problems.clone();
+        if lock(&self.published).publish(frame, view.drops) {
+            (self.wake)();
+        } else {
+            // Dropped while it rendered: its frame is no one's, its problems
+            // the next one's.
+            self.problems = problems;
+        }
     }
 
     /// Answers each read whose view's newest frame is done; drops those no
@@ -374,7 +359,8 @@ impl Worker {
             let targets = newest
                 .then(|| self.renderer.targets(&view.viewport))
                 .flatten();
-            reading.answer(
+            answer(
+                reading,
                 &self.renderer,
                 targets,
                 &view.desc,

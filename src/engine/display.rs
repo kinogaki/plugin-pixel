@@ -8,16 +8,16 @@
 //! shown frame is never overwritten; three images a view leave one to write
 //! while one is shown and the newest waits. A pin let go wakes the render
 //! thread, which may have a frame waiting for an image.
-use super::Message;
+use super::{Message, Own};
 use crate::gpu::Image;
 use crate::outputs::Output;
 use kinogaki_render_api::display::{Display, FilmImage, Shown, ShownFilm};
-use kinogaki_render_api::geometry::Diagnostic;
+use kinogaki_render_api::thread::lock;
 use kinogaki_render_api::{Aov, Frame, ViewId};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 /// Display images a view.
 pub const IMAGES: usize = 3;
@@ -61,33 +61,14 @@ pub fn image_key(set: u64, at: usize) -> u64 {
     set << 3 | at as u64
 }
 
-/// What the engine's handle, its display and its render thread share.
+/// What the display and the render thread share besides what the thread
+/// publishes.
 #[derive(Default)]
 pub struct Shared {
-    /// Each view's newest frame.
-    pub frames: BTreeMap<ViewId, Arc<Frame>>,
-    /// Why views can't render.
-    pub problems: BTreeMap<ViewId, Diagnostic>,
     /// Each view's display images.
     pub rings: BTreeMap<ViewId, Ring>,
     /// The outputs each view's images keep beside the beauty.
     pub kept: BTreeMap<ViewId, Vec<Output>>,
-    /// How often the host dropped each view: a frame of a view dropped
-    /// since it was given is never published, so a later view given the
-    /// same id never shows the dropped one's.
-    pub drops: BTreeMap<ViewId, u64>,
-}
-
-impl Shared {
-    /// How often view `view` was dropped so far.
-    pub fn drops(&self, view: ViewId) -> u64 {
-        self.drops.get(&view).copied().unwrap_or(0)
-    }
-}
-
-/// The shared state, locked (a poisoned lock is still the state).
-pub fn lock(shared: &Mutex<Shared>) -> MutexGuard<'_, Shared> {
-    shared.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// A host's hold on an image: let go, it unpins it and wakes the render
@@ -155,7 +136,7 @@ impl Display for PixelDisplay {
             .collect();
         if !new.is_empty() {
             kept.extend(new);
-            let _ = self.freed.send(Message::Keep(frame.view, kept.clone()));
+            let _ = (self.freed).send(Message::Engine(Own::Keep(frame.view, kept.clone())));
         }
         let (ring, at) = holding(&shared, frame)?;
         let image = &ring.images[at];
