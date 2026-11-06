@@ -27,7 +27,7 @@ Every pass is deterministic: a frame of the same scene and view is the same imag
 
 ## Outputs
 
-Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occlusion, Depth, Normal and Object ID, each a film-size texture; a final render reads them at the view's size. A compositing host takes the film (`Display::acquire_film`): the beauty and the outputs it asks for, kept from a later frame on.
+Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occlusion, Depth, Normal and Object ID, each a film-size texture; a final render reads them at the view's size. A compositing host takes the film (`Display::acquire_film`): one Image of the beauty and the outputs it asks for (kept from a later frame on), each layer held as its texture, its metadata saying it is pixel art.
 
 ## Code
 

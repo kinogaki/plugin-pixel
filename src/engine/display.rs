@@ -1,7 +1,7 @@
 //! Pixel's display: each frame is in one of its view's display images on the
 //! host's own device, shown where it is. A compositing host takes the film
-//! instead: the display image's film-size copies of the frame's outputs,
-//! pinned with it.
+//! instead: the display image's film-size copies of the frame's outputs as
+//! one Image, pinned with it, its pixels meant to be seen as pixels.
 //!
 //! The render thread writes an image only when no host pins it and it does
 //! not hold the view's newest frame (which a host may be about to take), so a
@@ -11,7 +11,9 @@
 use super::{Message, Own};
 use crate::gpu::Image;
 use crate::outputs::Output;
-use kinogaki_render_api::display::{Display, FilmImage, Shown, ShownFilm};
+use kinogaki_render_api::display::{self, Display, Shown};
+use kinogaki_render_api::geometry::image::{self, metadata};
+use kinogaki_render_api::geometry::{Attribute, Domain, Meaning};
 use kinogaki_render_api::thread::lock;
 use kinogaki_render_api::{Aov, Frame, ViewId};
 use std::collections::BTreeMap;
@@ -104,6 +106,15 @@ pub struct PixelDisplay {
     pub(super) freed: Sender<Message>,
 }
 
+/// `film` saying its pixels are meant to be seen as pixels.
+fn pixelated(film: image::Image) -> Option<image::Image> {
+    let one = Attribute::tuples(vec![1i32], Meaning::None).ok()?;
+    let said = film
+        .attributes()
+        .with(Domain::Detail, metadata::PIXELATED, one);
+    film.with_attributes(said.ok()?).ok()
+}
+
 /// The ring and index of the image holding `frame`, while it does.
 fn holding<'a>(shared: &'a Shared, frame: &Arc<Frame>) -> Option<(&'a Ring, usize)> {
     let ring = shared.rings.get(&frame.view)?;
@@ -121,7 +132,7 @@ impl Display for PixelDisplay {
         Some(Shown::new(frame.clone(), (ring.set, at as u32), view, pin))
     }
 
-    fn acquire_film(&mut self, frame: &Arc<Frame>, aovs: &[Aov]) -> Option<ShownFilm> {
+    fn acquire_film(&mut self, frame: &Arc<Frame>, aovs: &[Aov]) -> Option<image::Image> {
         let wanted: Vec<Output> = (aovs.iter())
             .filter_map(|a| Output::of_id(&a.id))
             .filter(|&o| o != Output::Beauty)
@@ -140,20 +151,18 @@ impl Display for PixelDisplay {
         }
         let (ring, at) = holding(&shared, frame)?;
         let image = &ring.images[at];
+        let id = |k: usize| ring.set << 16 ^ (at + IMAGES * (k + 1)) as u64;
         let images = (image.film.iter().enumerate())
             .filter(|(_, (o, _))| *o == Output::Beauty || wanted.contains(o))
-            .map(|(k, (o, target))| FilmImage {
-                aov: o.aov(),
-                view: target.view.clone(),
-                key: (ring.set, (at + IMAGES * (k + 1)) as u32),
-            })
+            .map(|(k, (o, target))| (o.aov(), target.view.clone(), id(k)))
             .collect();
         let size = [
             image.film[0].1.texture.width(),
             image.film[0].1.texture.height(),
         ];
         let pin = Pin::new(ring, at, self.freed.clone());
-        Some(ShownFilm::new(frame.clone(), size, images, pin).pixelated())
+        let film = display::film(frame, size, images, pin)?;
+        pixelated(film)
     }
 
     /// The outputs the view was asked to keep go: a later view given its id

@@ -4,7 +4,9 @@
 //! the film a compositor reads, and a dropped read.
 use super::support::{LIMIT, at, pixel, scene, surface, view};
 use kinogaki_render_api::aov::standard as aovs;
-use kinogaki_render_api::geometry::Vec3;
+use kinogaki_render_api::display::Texture;
+use kinogaki_render_api::geometry::image::{Image, metadata};
+use kinogaki_render_api::geometry::{Domain, Vec3};
 use kinogaki_render_api::standard::{Light, Shape as LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
@@ -220,12 +222,13 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     let film = display
         .acquire_film(&frame, std::slice::from_ref(&albedo))
         .expect("the film");
-    assert_eq!(film.size(), [16, 12]);
+    assert_eq!(film.data().size(), [16, 12]);
+    let pixelated = (film.attributes()).get(Domain::Detail, metadata::PIXELATED);
     assert!(
-        film.is_pixelated(),
+        pixelated.is_some(),
         "pixel art magnifies through the nearest texel"
     );
-    assert!(film.image("albedo").is_none(), "kept from a later frame on");
+    assert!(!holds(&film, "albedo"), "kept from a later frame on");
     drop(film);
     // Asking for it rendered the view again, keeping the albedo.
     waiter.until(LIMIT, || {
@@ -235,7 +238,16 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     });
     let frame = engine.latest(ViewId(1)).unwrap();
     let film = display.acquire_film(&frame, &[albedo]).expect("the film");
-    assert!(film.image("albedo").is_some() && film.images()[0].aov.is_beauty());
+    assert!(holds(&film, "albedo") && film.layers()[0].format().name.is_empty());
+    assert!(
+        film.layers().iter().all(|l| Texture::of(l).is_some()),
+        "held as textures"
+    );
+}
+
+/// Whether `film` holds output `id`'s layer.
+fn holds(film: &Image, id: &str) -> bool {
+    (film.layers().iter()).any(|l| &*l.format().name == id)
 }
 
 /// A final read of a view whose camera went fails: never the film of the
@@ -281,7 +293,7 @@ fn a_dropped_views_kept_outputs_go_with_it() {
     waiter.until(LIMIT, || {
         (engine.latest(ViewId(1)))
             .and_then(|f| display.acquire_film(&f, std::slice::from_ref(&albedo)))
-            .is_some_and(|film| film.image("albedo").is_some())
+            .is_some_and(|film| holds(&film, "albedo"))
     });
     engine.drop_view(ViewId(1));
     display.drop_view(ViewId(1));
@@ -289,8 +301,5 @@ fn a_dropped_views_kept_outputs_go_with_it() {
     waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
     let film = display.acquire_film(&frame, &[albedo]).expect("the film");
-    assert!(
-        film.image("albedo").is_none(),
-        "nothing kept of the old view"
-    );
+    assert!(!holds(&film, "albedo"), "nothing kept of the old view");
 }
