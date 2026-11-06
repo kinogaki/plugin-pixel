@@ -53,7 +53,7 @@ cargo test                           # the scene sync
 cargo test --test gpu -- --ignored   # the GPU tests (a native graphics adapter)
 ```
 
-`plugin/` is the library Studio loads. It links Studio's shared library (`kinogaki_shared`), so it is built in Studio's tree, or against a Studio release's plugin kit as the SDK's guides describe; Studio's tree also runs Pixel's example render and the SDK's conformance suite through the editor (`workflows/`).
+`plugin/` is the library Studio loads. It links Studio's shared library (`kinogaki_shared`), so it is built in Studio's tree, or against a Studio release's plugin kit as the SDK's guides describe; Studio's tree also runs Pixel's example render through the editor (`workflows/`); Pixel's own GPU tests run the SDK's engine conformance.
 
 ## License
 
