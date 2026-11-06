@@ -152,20 +152,16 @@ fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
     ];
     let outputs = waiter.take(&engine.finish(ViewId(1), &asked), LIMIT);
     assert_eq!(
-        (outputs.width, outputs.height, outputs.planes.len()),
-        (64, 48, 4)
+        (outputs.data().size(), outputs.layers().len()),
+        ([64, 48], 4)
     );
-    for (desc, plane) in &outputs.planes {
-        assert_eq!(
-            plane.len(),
-            64 * 48 * desc.aov.channels(),
-            "{}",
-            desc.aov.id
-        );
-    }
-    let ids = &outputs.planes[3].1;
-    let box_id = ids[(26 * 64 + 32) as usize].to_bits();
-    let sky_id = ids[0].to_bits();
+    let names: Vec<&str> = (outputs.layers().iter())
+        .map(|l| &*l.format().name)
+        .collect();
+    assert_eq!(names, ["", "albedo", "depth", "objectId"]);
+    let ids = outputs.plane(3).expect("the ids");
+    let id = |p: usize| u32::from_ne_bytes(ids[p * 4..p * 4 + 4].try_into().unwrap());
+    let (box_id, sky_id) = (id(26 * 64 + 32), id(0));
     assert!(box_id > 0 && box_id < u32::MAX, "the box {box_id}");
     assert_eq!(sky_id, u32::MAX, "the sky: a miss");
     // A read no one holds any more is let go.

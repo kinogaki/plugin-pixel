@@ -6,7 +6,7 @@ use crate::outputs::Output;
 use kinogaki_render_api::geometry::Error;
 use kinogaki_render_api::thread::Reading;
 use kinogaki_render_api::value::{Parameters, Value};
-use kinogaki_render_api::{FinalOutputs, PreviewScene, ViewCamera, ViewDesc, ViewMode};
+use kinogaki_render_api::{PreviewScene, ViewCamera, ViewDesc, ViewMode, aov};
 use std::sync::Arc;
 
 /// Film pixels across a swatch.
@@ -70,12 +70,10 @@ pub fn answer(
             Some((d, plane))
         })
         .collect::<Vec<_>>();
-    reading.deliver(FinalOutputs {
-        width: view[0],
-        height: view[1],
-        planes,
-        names: Vec::new(),
-    });
+    match aov::image(view, &planes, &[]) {
+        Ok(image) => reading.deliver(image),
+        Err(why) => reading.fail(why),
+    }
 }
 
 #[cfg(test)]
