@@ -33,7 +33,7 @@ fn grid(n: u32, at: Xform) -> Shape {
 }
 
 #[test]
-#[ignore = "a measurement, run by hand"]
+#[ignore = "hand: a measurement"]
 fn hand_run_a_moved_object_beside_many_instances() {
     let (device, queue) = engine::device();
     let mut renderer = Renderer::new(&device, &queue);
