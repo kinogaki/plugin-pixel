@@ -49,13 +49,21 @@ struct Frame {
     volume_ramp: array<vec4<f32>, 64>,
 }
 
-// An object table entry (geometry::Object): its material and id.
-struct Object {
+// A mesh placed (records::GpuInstance): its own space to world and back,
+// three rows each (a flat placement's way back is NaN: no ray enters it),
+// its material and ids.
+struct Instance {
+    to_world_x: vec4<f32>,
+    to_world_y: vec4<f32>,
+    to_world_z: vec4<f32>,
+    to_own_x: vec4<f32>,
+    to_own_y: vec4<f32>,
+    to_own_z: vec4<f32>,
     // rgb: the Pixel Surface's color (ACEScg).
     albedo: vec4<f32>,
     // rgb: its transmittance, translucency × translucency color.
     transmit: vec4<f32>,
-    // x: the object id.
+    // x: the object id; y: its mesh's BVH root node.
     id: vec4<u32>,
 }
 
@@ -64,7 +72,19 @@ const MISS: u32 = 0xffffffffu;
 const PI: f32 = 3.14159265358979;
 
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(1) @binding(6) var<storage, read> objects: array<Object>;
+@group(1) @binding(6) var<storage, read> instances: array<Instance>;
+
+// Own-space point `p` of instance `i` in world space.
+fn own_to_world(i: Instance, p: vec3<f32>) -> vec3<f32> {
+    let h = vec4<f32>(p, 1.0);
+    return vec3<f32>(dot(i.to_world_x, h), dot(i.to_world_y, h), dot(i.to_world_z, h));
+}
+
+// Own-space normal `n` of instance `i` in world space (not unit): by the
+// inverse transpose, the way back's rows as columns.
+fn own_to_world_normal(i: Instance, n: vec3<f32>) -> vec3<f32> {
+    return i.to_own_x.xyz * n.x + i.to_own_y.xyz * n.y + i.to_own_z.xyz * n.z;
+}
 
 fn orthographic() -> bool {
     return frame.view.w == 1u;

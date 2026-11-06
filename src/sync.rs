@@ -1,23 +1,26 @@
 //! The host's prims as Pixel's scene: [`Sync`] holds every prim it was sent
 //! and, as each batch arrives, says what of the [`Scene`] changed and makes
-//! it again, in world space, at the shutter's opening (Pixel draws each frame
-//! sharp).
+//! that again, at the shutter's opening (Pixel draws each frame sharp).
 //!
-//! - **Shapes and Instancers** become meshes: each shape's triangles split
-//!   by material, every instance of a prototype flattened to world space (a
-//!   prim an Instancer names renders only through it; an instance's material
-//!   overrides its prototype's). Triangles whose material is a Pixel Volume
-//!   become that volume's bounds instead, and are not drawn. A material's
-//!   color attribute becomes each corner's tint (vertex, point, primitive or
-//!   detail values; white where a shape lacks it); `N` its shading normals.
+//! - **Shapes and Instancers** become meshes in their own space and the
+//!   instances placing them: each shape's triangles split by material into
+//!   meshes, made once and kept while only the shape's placement, visibility
+//!   or name changes (its dirty bits); a prim an Instancer names renders
+//!   only through it, and an instance's material overrides its prototype's
+//!   (meshes of their own, kept likewise). Every placement of a mesh is an
+//!   instance, so a move remakes the instances alone. Triangles whose
+//!   material is a Pixel Volume become that volume's bounds instead, in
+//!   world space, and are not drawn. A material's color attribute becomes
+//!   each corner's tint (vertex, point, primitive or detail values; white
+//!   where a shape lacks it); `N` its shading normals.
 //! - **Materials** become surfaces and media ([`nodes::material`]).
 //! - **Declared prims** become lights: the domes add up into the ambient
 //!   light (a ground color below the horizon), the rims by their side, the
 //!   first visible fog is the fog.
 //!
-//! Only meshes rebuild the BVH. A material's new colors rewrite the object
-//! table; a new kind of material, or a new color attribute, makes the meshes
-//! again; lights and cameras never touch geometry.
+//! A material's new colors rewrite the instances' surfaces alone; a new
+//! kind of material, or a new color attribute, makes the meshes again;
+//! lights and cameras never touch geometry.
 //!
 //! What it can't render as sent it says ([`Sync::problems`]): volumes past
 //! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
@@ -26,13 +29,16 @@ use crate::gpu::Changed;
 use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Material};
-use crate::render::{Ambient, Fog, Light, LightShape, Mesh, Rims, Scene, Surface, Volume};
+use crate::render::{
+    Ambient, Fog, Instance, Light, LightShape, Mesh, Rims, Scene, Surface, Volume,
+};
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
 use kinogaki_render_api::standard::{self, Shape as LightKind};
 use kinogaki_render_api::{
-    Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
+    Dirty, Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 /// Every prim held, and the scene they make.
 #[derive(Default)]
@@ -42,6 +48,9 @@ pub struct Sync {
     materials: BTreeMap<PrimId, (Material, u32)>,
     /// The Material prim each of the scene's volumes is filled by.
     filled_by: Vec<Option<PrimId>>,
+    /// What each placed shape makes, by the shape and the material an
+    /// instance overrides its own with.
+    made: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
     settings: SceneSettings,
     scene: Scene,
     /// What it can't render as sent, by what found it.
@@ -58,6 +67,15 @@ struct Problems {
 /// Three rows of `x` in single precision.
 fn rows(x: &Xform) -> [[f32; 4]; 3] {
     x.rows().map(|r| r.map(|v| v as f32))
+}
+
+/// What a shape makes under one choice of materials, in its own space.
+#[derive(Default)]
+struct Made {
+    /// Its surface triangles by material.
+    meshes: Vec<(Option<PrimId>, Arc<Mesh>)>,
+    /// Its volume triangles by material: three corners a triangle.
+    volumes: Vec<(Option<PrimId>, Vec<[f32; 3]>)>,
 }
 
 /// What a batch touched.
@@ -78,6 +96,12 @@ impl Touched {
         }
     }
 }
+
+/// What changes a shape's meshes: a placement, visibility or name doesn't.
+const RESHAPED: Dirty = Dirty::POINTS
+    .union(Dirty::TOPOLOGY)
+    .union(Dirty::PRIMVARS)
+    .union(Dirty::MATERIALS);
 
 impl Sync {
     /// The scene the prims make.
@@ -103,36 +127,48 @@ impl Sync {
     /// Applies `update`, saying what of the scene changed.
     pub fn apply(&mut self, update: SceneUpdate) -> Changed {
         let mut touched = Touched::default();
+        let mut remade = BTreeSet::new();
         for id in &update.removed {
             if let Some(prim) = self.prims.remove(id) {
                 touched.by(&prim);
+                remade.insert(*id);
             }
         }
         for (id, prim) in update.added {
             touched.by(&prim);
+            remade.insert(id);
             self.prims.insert(id, prim);
         }
         for change in update.changed {
             touched.by(&change.prim);
+            if change.dirty.intersects(RESHAPED) {
+                remade.insert(change.id);
+            }
             self.prims.insert(change.id, change.prim);
         }
+        self.made.retain(|(shape, _), _| !remade.contains(shape));
         if let Some(settings) = update.settings {
             self.settings = settings;
             touched.declared = true;
         }
         let mut changed = Changed::default();
         if touched.materials {
-            let reshaped = self.read_materials();
+            if self.read_materials() {
+                self.made.clear();
+                touched.shapes = true;
+            }
             changed.surfaces = true;
-            changed.volumes = true;
-            touched.shapes |= reshaped;
         }
         if touched.shapes {
-            self.build_geometry();
-            changed.geometry = true;
-            changed.volumes = true;
+            let (meshes, volumes) = (self.scene.meshes.clone(), self.scene.volumes.clone());
+            self.place_all();
+            changed.meshes = !same_meshes(&meshes, &self.scene.meshes);
+            changed.instances = true;
+            changed.volumes = volumes != self.scene.volumes;
         } else if touched.materials {
+            let volumes = self.scene.volumes.clone();
             self.restyle_volumes();
+            changed.volumes = volumes != self.scene.volumes;
         }
         if touched.declared {
             self.read_lights();
@@ -183,8 +219,9 @@ impl Sync {
             .map_or(&DEFAULT, |m| &m.0)
     }
 
-    /// Every top-level shape and instancer, made again.
-    fn build_geometry(&mut self) {
+    /// Every top-level shape and Instancer placed again: the instances and
+    /// volumes, the meshes as kept or made.
+    fn place_all(&mut self) {
         let named: BTreeSet<PrimId> = (self.prims.values())
             .filter_map(|p| match p {
                 Prim::Instancer(i) => Some(i.prototypes().iter().copied()),
@@ -192,35 +229,41 @@ impl Sync {
             })
             .flatten()
             .collect();
-        let mut built = Built::default();
+        let mut placed = Placed {
+            kept: std::mem::take(&mut self.made),
+            ..Placed::default()
+        };
         for (id, prim) in &self.prims {
             let object = id.slot + 1;
             match prim {
                 _ if named.contains(id) => {}
                 Prim::Shape(shape) if shape.visibility().visible => {
-                    self.place(shape, &shape.xform().at(0.0), None, object, &mut built);
+                    let at = shape.xform().at(0.0);
+                    self.place((*id, shape), &at, None, object, &mut placed);
                 }
                 Prim::Instancer(inst) if inst.visibility().visible => {
                     let at = inst.xform().at(0.0);
-                    self.instances(inst, &at, object, &mut built, &mut vec![*id]);
+                    self.instances(inst, &at, object, &mut placed, &mut vec![*id]);
                 }
                 _ => {}
             }
         }
-        self.scene.meshes = built.meshes;
+        self.made = placed.made;
+        self.scene.meshes = placed.meshes;
+        self.scene.instances = placed.instances;
         self.problems.geometry.clear();
-        if built.round {
+        if placed.round {
             self.problems.geometry.push(Diagnostic::warning(
                 "an Instancer places itself: its cycle places nothing",
             ));
         }
-        if built.volumes.len() > MAX_VOLUMES {
+        if placed.volumes.len() > MAX_VOLUMES {
             self.problems.geometry.push(Diagnostic::warning(format!(
                 "{} volumes: Pixel renders the first {MAX_VOLUMES}",
-                built.volumes.len()
+                placed.volumes.len()
             )));
         }
-        (self.scene.volumes, self.filled_by) = built.volumes.into_iter().unzip();
+        (self.scene.volumes, self.filled_by) = placed.volumes.into_iter().unzip();
     }
 
     /// `instancer`'s instances under `above`, it and the Instancers above it
@@ -230,7 +273,7 @@ impl Sync {
         instancer: &Instancer,
         above: &Xform,
         object: u32,
-        built: &mut Built,
+        placed: &mut Placed,
         path: &mut Vec<PrimId>,
     ) {
         for (i, xform) in instancer.xforms().iter().enumerate() {
@@ -238,11 +281,13 @@ impl Sync {
             let material = instancer.subsets().of(i).map(|m| m.prim());
             let prototype = instancer.prototype_of(i);
             match self.prims.get(&prototype) {
-                Some(Prim::Shape(shape)) => self.place(shape, &at, material, object, built),
-                Some(Prim::Instancer(_)) if path.contains(&prototype) => built.round = true,
+                Some(Prim::Shape(shape)) => {
+                    self.place((prototype, shape), &at, material, object, placed);
+                }
+                Some(Prim::Instancer(_)) if path.contains(&prototype) => placed.round = true,
                 Some(Prim::Instancer(nested)) => {
                     path.push(prototype);
-                    self.instances(nested, &at, object, built, path);
+                    self.instances(nested, &at, object, placed, path);
                     path.pop();
                 }
                 _ => {}
@@ -250,33 +295,69 @@ impl Sync {
         }
     }
 
-    /// `shape` placed by `at`, its materials overridden by `instead`.
+    /// Shape `id` placed by `at`, its materials overridden by `instead`: an
+    /// instance of each of its meshes, and its volumes in world space.
     fn place(
         &self,
-        shape: &Shape,
+        (id, shape): (PrimId, &Shape),
         at: &Xform,
         instead: Option<PrimId>,
         object: u32,
-        built: &mut Built,
+        placed: &mut Placed,
     ) {
+        let key = (id, instead);
+        let made = match placed.made.get(&key).or_else(|| placed.kept.get(&key)) {
+            Some(made) => made.clone(),
+            None => Arc::new(self.make(shape, instead)),
+        };
+        let (to_world, to_own) = (rows(at), at.inverse().map(|back| rows(&back)));
+        for (material, mesh) in &made.meshes {
+            let index = *placed.index.entry(Arc::as_ptr(mesh)).or_insert_with(|| {
+                placed.meshes.push(mesh.clone());
+                placed.meshes.len() as u32 - 1
+            });
+            let surface = material
+                .and_then(|m| self.materials.get(&m))
+                .map_or(u32::MAX, |m| m.1);
+            placed.instances.push(Instance {
+                mesh: index,
+                to_world,
+                to_own,
+                surface,
+                id: object,
+            });
+        }
+        for (material, corners) in &made.volumes {
+            if let Material::Volume(medium) = self.material(*material) {
+                let world = (corners.iter())
+                    .map(|p| at.apply_point(Vec3::from(p.map(f64::from))).to_f32())
+                    .collect();
+                placed
+                    .volumes
+                    .push((volume(shape, at, world, *medium), *material));
+            }
+        }
+        placed.made.insert(key, made);
+    }
+
+    /// What `shape` makes with its materials overridden by `instead`, in its
+    /// own space: its triangles by material, meshes for surfaces and corners
+    /// for volumes.
+    fn make(&self, shape: &Shape, instead: Option<PrimId>) -> Made {
+        let mut made = Made::default();
         let Topology::Triangles(triangles) = shape.topology() else {
-            return;
+            return made;
         };
         let triangles: &[[u32; 3]] = triangles.as_slice();
-        let world: Vec<[f32; 3]> = (shape.points().iter())
-            .map(|p| at.apply_point(Vec3::from(p.map(f64::from))).to_f32())
-            .collect();
-        let normals = shape.corners::<3>(triangles, names::N).map(|n| {
-            let turned = |v: [f32; 3]| at.apply_normal(Vec3::from(v.map(f64::from))).to_f32();
-            n.into_iter().map(turned).collect::<Vec<_>>()
-        });
+        let points = shape.points();
+        let normals = shape.corners::<3>(triangles, names::N);
         // Triangles by the material they render with.
         let mut groups: BTreeMap<Option<PrimId>, Vec<usize>> = BTreeMap::new();
         for t in 0..triangles.len() {
             let material = instead.or_else(|| shape.subsets().of(t).map(|m| m.prim()));
             groups.entry(material).or_default().push(t);
         }
-        for (material_id, ts) in groups {
+        for (material, ts) in groups {
             let corners = |list: &[[f32; 3]]| -> Vec<[f32; 3]> {
                 ts.iter()
                     .flat_map(|&t| (0..3).map(move |k| list[3 * t + k]))
@@ -284,31 +365,24 @@ impl Sync {
             };
             let positions: Vec<[f32; 3]> = ts
                 .iter()
-                .flat_map(|&t| triangles[t].map(|p| world[p as usize]))
+                .flat_map(|&t| triangles[t].map(|p| points[p as usize]))
                 .collect();
-            match self.material(material_id) {
-                Material::Volume(medium) => {
-                    built
-                        .volumes
-                        .push((volume(shape, at, positions, *medium), material_id));
-                }
+            match self.material(material) {
+                Material::Volume(_) => made.volumes.push((material, positions)),
                 Material::Surface(_, attribute) => {
                     let tints = attribute
                         .as_ref()
                         .and_then(|a| shape.corners::<3>(triangles, a));
-                    let surface = material_id
-                        .and_then(|m| self.materials.get(&m))
-                        .map_or(u32::MAX, |m| m.1);
-                    built.meshes.push(Mesh {
-                        corners: positions,
-                        normals: normals.as_deref().map(corners),
-                        tints: tints.as_deref().map(corners),
-                        surface,
-                        id: object,
-                    });
+                    let mesh = Mesh::new(
+                        positions,
+                        normals.as_deref().map(corners),
+                        tints.as_deref().map(corners),
+                    );
+                    made.meshes.push((material, Arc::new(mesh)));
                 }
             }
         }
+        made
     }
 
     /// The volumes' media again, their bounds as they were.
@@ -423,13 +497,25 @@ impl Sync {
     }
 }
 
-/// What the shapes make.
+/// What placing the shapes makes.
 #[derive(Default)]
-struct Built {
-    meshes: Vec<Mesh>,
+struct Placed {
+    /// What the shapes made before, taken as they are placed again.
+    kept: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
+    /// What the placed shapes make.
+    made: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
+    meshes: Vec<Arc<Mesh>>,
+    /// Each mesh's index in `meshes`.
+    index: BTreeMap<*const Mesh, u32>,
+    instances: Vec<Instance>,
     volumes: Vec<(Volume, Option<PrimId>)>,
     /// An Instancer placed itself.
     round: bool,
+}
+
+/// Whether `a` and `b` are the same meshes, in the same order.
+fn same_meshes(a: &[Arc<Mesh>], b: &[Arc<Mesh>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
 }
 
 /// Adds `b` into `a`.

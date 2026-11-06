@@ -2,4 +2,5 @@
 //! adapter (`cargo test --test gpu -- --ignored`).
 mod conformance;
 mod engine;
+mod moves;
 mod support;

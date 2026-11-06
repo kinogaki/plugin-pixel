@@ -1,6 +1,7 @@
-//! Pixel's renderer, knowing no SDK: the scene it renders ([`Scene`], world
-//! space throughout), the film and camera ([`film`], [`camera`]), the BVH
-//! its rays trace ([`bvh`]) and the dither ([`dither`]). The passes that render it on a
+//! Pixel's renderer, knowing no SDK: the scene it renders ([`Scene`]: meshes
+//! in their own space placed by instances, the rest in world space), the
+//! film and camera ([`film`], [`camera`]), the two levels of BVH its rays
+//! trace ([`bvh`]) and the dither ([`dither`]). The passes that render it on a
 //! wgpu device are the crate's `gpu` module; `sync` makes a [`Scene`] of
 //! the host's prims.
 pub mod bvh;
@@ -10,12 +11,17 @@ pub mod film;
 pub mod settings;
 pub mod vector;
 
-/// Everything a frame renders, in world space and linear ACEScg.
+use std::sync::Arc;
+
+/// Everything a frame renders, in linear ACEScg.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
-    /// The surfaces drawn and traced.
-    pub meshes: Vec<Mesh>,
-    /// The materials meshes shade with, by [`Mesh::surface`].
+    /// The surfaces' geometry, each in its own space, shared by the
+    /// instances placing it.
+    pub meshes: Vec<Arc<Mesh>>,
+    /// The meshes placed: what is drawn and traced.
+    pub instances: Vec<Instance>,
+    /// The materials instances shade with, by [`Instance::surface`].
     pub surfaces: Vec<Surface>,
     /// The closed meshes filled with a medium (never drawn).
     pub volumes: Vec<Volume>,
@@ -29,16 +35,53 @@ pub struct Scene {
     pub fog: Option<Fog>,
 }
 
-/// Triangles of one material: three corners a triangle.
-#[derive(Clone, Debug, Default, PartialEq)]
+/// Triangles of one material: three corners a triangle, in their own space,
+/// with the hierarchy rays trace them by.
+#[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
-    /// Corner positions, world space.
+    /// Corner positions.
     pub corners: Vec<[f32; 3]>,
-    /// Corner shading normals, world space (none: flat).
+    /// Corner shading normals (none: flat).
     pub normals: Option<Vec<[f32; 3]>>,
     /// What each corner's albedo is multiplied by (the material's color
     /// attribute; none: white).
     pub tints: Option<Vec<[f32; 3]>>,
+    /// The hierarchy over its triangles.
+    pub bvh: bvh::Bvh,
+}
+
+impl Mesh {
+    /// The mesh of `corners` (whole triangles: a partial one is dropped),
+    /// its normals and tints kept only when they match them, its hierarchy
+    /// built.
+    pub fn new(
+        mut corners: Vec<[f32; 3]>,
+        normals: Option<Vec<[f32; 3]>>,
+        tints: Option<Vec<[f32; 3]>>,
+    ) -> Mesh {
+        corners.truncate(corners.len() / 3 * 3);
+        let fits = |c: Option<Vec<[f32; 3]>>| c.filter(|c| c.len() == corners.len());
+        let (normals, tints) = (fits(normals), fits(tints));
+        let bvh = bvh::Bvh::build(corners.as_chunks::<3>().0);
+        Mesh {
+            corners,
+            normals,
+            tints,
+            bvh,
+        }
+    }
+}
+
+/// A mesh placed in the world with a material.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Instance {
+    /// Its mesh, an index into [`Scene::meshes`].
+    pub mesh: u32,
+    /// Its own space to world: three rows.
+    pub to_world: [[f32; 4]; 3],
+    /// World to its own space: three rows (none for a flat placement, which
+    /// no ray enters).
+    pub to_own: Option<[[f32; 4]; 3]>,
     /// Its material, an index into [`Scene::surfaces`] (past the end: the
     /// default Pixel Surface).
     pub surface: u32,

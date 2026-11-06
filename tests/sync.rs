@@ -1,5 +1,5 @@
-//! The host's prims as Pixel's scene: shapes and instances flattened to
-//! world space by material, volumes apart, tints and normals per corner,
+//! The host's prims as Pixel's scene: shapes as meshes by material in
+//! their own space, placed by instances (a move remakes the instances alone), volumes apart, tints and normals per corner,
 //! lights, domes, rims and fog, and what each batch says changed.
 use kinogaki_pixel::lights::{RIM_LIGHT, light_types};
 use kinogaki_pixel::nodes::{SURFACE, VOLUME};
@@ -63,6 +63,17 @@ fn material(def: kinogaki_studio_api::NodeTypeId, values: &[(&str, Value)]) -> P
     })
 }
 
+/// Instance `k`'s corners in world space.
+fn placed(scene: &kinogaki_pixel::render::Scene, k: usize) -> Vec<[f32; 3]> {
+    let i = &scene.instances[k];
+    let mesh = &scene.meshes[i.mesh as usize];
+    let at = |p: [f32; 3]| {
+        i.to_world
+            .map(|r| r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3])
+    };
+    mesh.corners.iter().map(|&p| at(p)).collect()
+}
+
 fn added(prims: Vec<(PrimId, Prim)>) -> SceneUpdate {
     SceneUpdate {
         added: prims,
@@ -80,20 +91,57 @@ fn a_shape_is_a_world_space_mesh_tinted_by_its_material_attribute() {
         .build()
         .unwrap();
     let changed = sync.apply(added(vec![(id(0), red), (id(1), Prim::Shape(shape))]));
-    assert!(changed.geometry && changed.surfaces);
+    assert!(changed.meshes && changed.instances && changed.surfaces);
     let scene = sync.scene();
-    let [mesh] = &scene.meshes[..] else {
-        panic!("one mesh");
+    let ([mesh], [instance]) = (&scene.meshes[..], &scene.instances[..]) else {
+        panic!("one mesh, placed once");
     };
     assert_eq!(mesh.corners.len(), 6);
-    assert!(mesh.corners.iter().all(|p| p[2] == 5.0));
+    assert!(mesh.corners.iter().all(|p| p[2] == 0.0), "its own space");
+    assert!(placed(scene, 0).iter().all(|p| p[2] == 5.0));
     assert_eq!(
         mesh.tints.as_deref().map(|t| t[0]),
         Some([0.5; 3]),
         "Cd, the default attribute"
     );
-    assert_eq!(scene.surfaces[mesh.surface as usize].color, [1.0, 0.0, 0.0]);
-    assert_eq!(mesh.id, 2, "its prim's slot, plus one");
+    assert_eq!(
+        scene.surfaces[instance.surface as usize].color,
+        [1.0, 0.0, 0.0]
+    );
+    assert_eq!(instance.id, 2, "its prim's slot, plus one");
+}
+
+/// A move remakes the instances alone: the mesh is the one made before. A
+/// new point remakes it.
+#[test]
+fn a_moved_shape_keeps_its_mesh() {
+    let mut sync = Sync::default();
+    let shape = |z: f64| {
+        (square(None, [1.0; 3]).rebuilt())
+            .xform(Sampled::still(Xform::translation(Vec3::new(0.0, 0.0, z))))
+            .build()
+            .unwrap()
+    };
+    sync.apply(added(vec![(id(0), Prim::Shape(shape(0.0)))]));
+    let before = sync.scene().meshes[0].clone();
+    let moved = SceneUpdate {
+        changed: vec![Change::new(
+            id(0),
+            Dirty::TRANSFORM,
+            Prim::Shape(shape(2.0)),
+        )],
+        ..SceneUpdate::new()
+    };
+    let changed = sync.apply(moved);
+    assert!(changed.instances && !changed.meshes && !changed.surfaces);
+    assert!(Arc::ptr_eq(&before, &sync.scene().meshes[0]));
+    assert!(placed(sync.scene(), 0).iter().all(|p| p[2] == 2.0));
+    let reshaped = SceneUpdate {
+        changed: vec![Change::new(id(0), Dirty::POINTS, Prim::Shape(shape(2.0)))],
+        ..SceneUpdate::new()
+    };
+    assert!(sync.apply(reshaped).meshes);
+    assert!(!Arc::ptr_eq(&before, &sync.scene().meshes[0]));
 }
 
 #[test]
@@ -110,7 +158,7 @@ fn a_new_color_rewrites_the_object_table_alone() {
         ..SceneUpdate::new()
     };
     let changed = sync.apply(update);
-    assert!(changed.surfaces && !changed.geometry && !changed.lights);
+    assert!(changed.surfaces && !changed.meshes && !changed.instances && !changed.lights);
     assert_eq!(sync.scene().surfaces[0].color, [0.0, 0.0, 1.0]);
 }
 
@@ -124,7 +172,7 @@ fn a_volume_material_makes_its_shape_a_volume_never_drawn() {
     ]));
     assert!(changed.volumes);
     let scene = sync.scene();
-    assert!(scene.meshes.is_empty());
+    assert!(scene.instances.is_empty());
     let [volume] = &scene.volumes[..] else {
         panic!("one volume");
     };
@@ -137,7 +185,7 @@ fn a_volume_material_makes_its_shape_a_volume_never_drawn() {
         ..SceneUpdate::new()
     };
     let changed = sync.apply(update);
-    assert!(changed.volumes && !changed.geometry);
+    assert!(changed.volumes && !changed.meshes && !changed.instances);
     assert_eq!(sync.scene().volumes[0].medium.density, 3.0);
 }
 
@@ -163,22 +211,26 @@ fn a_prototype_renders_only_through_its_instancer_with_its_materials() {
     ]));
     let scene = sync.scene();
     assert_eq!(
-        scene.meshes.len(),
+        scene.instances.len(),
         2,
         "two instances, the prototype not on its own"
     );
-    let lowest =
-        |m: &kinogaki_pixel::render::Mesh| m.corners.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
-    let mut lows: Vec<f32> = scene.meshes.iter().map(lowest).collect();
+    let lowest = |k: usize| {
+        placed(scene, k)
+            .iter()
+            .map(|p| p[0])
+            .fold(f32::MAX, f32::min)
+    };
+    let mut lows: Vec<f32> = (0..2).map(lowest).collect();
     lows.sort_by(f32::total_cmp);
     assert_eq!(lows, [1.0, 3.0]);
-    let first = scene.meshes.iter().find(|m| lowest(m) == 1.0).unwrap();
+    let first = &scene.instances[(0..2).find(|&k| lowest(k) == 1.0).unwrap()];
     assert_eq!(
         scene.surfaces[first.surface as usize].color,
         [0.0, 0.0, 1.0],
         "the instance's material"
     );
-    let second = scene.meshes.iter().find(|m| lowest(m) == 3.0).unwrap();
+    let second = &scene.instances[(0..2).find(|&k| lowest(k) == 3.0).unwrap()];
     assert!(
         scene.surfaces.get(second.surface as usize).is_none(),
         "the default"
@@ -222,7 +274,7 @@ fn lights_domes_rims_and_fog_light_the_scene() {
             .map(|(k, p)| (id(k as u32), p))
             .collect(),
     ));
-    assert!(changed.lights && !changed.geometry);
+    assert!(changed.lights && !changed.meshes && !changed.instances);
     let scene = sync.scene();
     assert_eq!(scene.lights.len(), 1, "the sun; the hidden one is out");
     assert_eq!(scene.lights[0].radiance, [3.0; 3]);
@@ -246,8 +298,8 @@ fn a_removed_shape_leaves_the_scene() {
         removed: vec![id(0)],
         ..SceneUpdate::new()
     });
-    assert!(changed.geometry);
-    assert!(sync.scene().meshes.is_empty());
+    assert!(changed.meshes && changed.instances);
+    assert!(sync.scene().meshes.is_empty() && sync.scene().instances.is_empty());
 }
 
 /// An Instancer a later change makes place itself (through another) places
@@ -265,7 +317,7 @@ fn a_cycle_of_instancers_places_nothing_and_says_so() {
     prims.extend((1..=20).map(|k| (id(k), Prim::Instancer(instancer(id(k - 1))))));
     sync.apply(added(prims));
     assert_eq!(
-        sync.scene().meshes.len(),
+        sync.scene().instances.len(),
         1,
         "the shape, through 20 Instancers"
     );
@@ -277,7 +329,7 @@ fn a_cycle_of_instancers_places_nothing_and_says_so() {
         ..SceneUpdate::new()
     });
     assert_eq!(
-        sync.scene().meshes.len(),
+        sync.scene().instances.len(),
         1,
         "the shape alone, named by none now"
     );

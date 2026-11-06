@@ -52,14 +52,14 @@ fn crossings(o: vec3<f32>, d: vec3<f32>) -> Crossings {
     if frame.media.x == 0u {
         return c;
     }
-    let inv = 1.0 / d;
+    let r = ray(o, d);
     var stack: array<u32, STACK>;
     var top = 1u;
     stack[0] = 0u;
     while top > 0u {
         top -= 1u;
         let n = medium_nodes[stack[top]];
-        if !hits_box(n, o, inv, FAR_MEDIUM) {
+        if box_entry(n, r, FAR_MEDIUM) < 0.0 {
             continue;
         }
         if n.count == 0u {
@@ -70,7 +70,7 @@ fn crossings(o: vec3<f32>, d: vec3<f32>) -> Crossings {
         }
         for (var k = n.a; k < n.a + n.count; k++) {
             let tri = medium_triangles[k];
-            let t = triangle_distance(tri, o, d);
+            let t = triangle_distance(tri, r);
             if t <= 0.0 {
                 continue;
             }

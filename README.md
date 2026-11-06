@@ -33,12 +33,12 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 
 | Module | Role |
 |---|---|
-| `render` | The renderer, knowing no SDK: the scene in world space, `film`, `camera`, `bvh` (binned SAH, built on the CPU when geometry changes), `dither`, `settings` |
-| `gpu` | The passes on the host's device, their records and shaders (`gpu/shaders`) |
+| `render` | The renderer, knowing no SDK: the scene (meshes in their own space and the instances placing them), `film`, `camera`, `bvh` (binned SAH in two levels: a BVH a mesh, built when it is made, and a top level over the instances, built when one moves), `dither`, `settings` |
+| `gpu` | The passes on the host's device (the G-buffer draws each mesh once for its instances; rays walk the top level, then each instance's mesh in its own space), their records and shaders (`gpu/shaders`) |
 | `description`, `settings`, `outputs` | What a host reads: capabilities, settings, outputs |
 | `nodes`, `presets` | Pixel Surface and Pixel Volume, their display approximation and translation; the starting materials |
 | `lights` | The light and fog types and kinds; emissions as colors |
-| `sync` | The host's prims as the scene: shapes and instances flattened by material, volumes, lights |
+| `sync` | The host's prims as the scene: each shape's meshes by material, kept while its dirty bits say only its placement, visibility or name changed; every placement an instance; volumes, lights |
 | `engine` | The render thread, the display images, final reads and previews |
 
 ## Building

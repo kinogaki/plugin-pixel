@@ -21,14 +21,14 @@ fn bounce(origin: vec3<f32>, d: vec3<f32>, depth: f32) -> vec3<f32> {
         return vec3<f32>(0.0);
     }
     let tri = triangles[hit.triangle];
-    let s = surfaces[hit.triangle];
-    let object = objects[s.object];
+    let object = instances[hit.instance];
     // The face the ray arrives at.
-    var n = normalize(cross(tri.e1.xyz, tri.e2.xyz));
+    var n = normalize(hit_normal(hit));
     n = select(n, -n, dot(n, d) > 0.0);
     let x = origin + d * hit.t;
     let light = irradiance(x, n, ray_offset(depth + hit.t), object.transmit.rgb);
-    return light * object.albedo.rgb * s.tint;
+    // The triangle's mean tint rides in its w's.
+    return light * object.albedo.rgb * vec3<f32>(tri.v0.w, tri.e1.w, tri.e2.w);
 }
 
 @compute @workgroup_size(8, 8)

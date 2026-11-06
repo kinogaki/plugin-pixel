@@ -1,5 +1,5 @@
-//! The renderer on a host's wgpu device: the scene's buffers (`scene`) and
-//! seven passes, recorded for one view at a time into a display image:
+//! The renderer on a host's wgpu device: the scene's buffers in two levels
+//! (`scene`: the meshes and the instances placing them) and seven passes, recorded for one view at a time into a display image:
 //!
 //! 1. **G-buffer** (raster): albedo (the material's color × its tint),
 //!    normal, depth, object id and the material's transmittance.
@@ -36,9 +36,12 @@ use scene::GpuScene;
 /// What changed in a scene since the renderer last took it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Changed {
-    /// Meshes: the vertices and the BVH are rebuilt.
-    pub geometry: bool,
-    /// Materials alone: the object table.
+    /// Meshes: their vertices and BVHs are laid out again (and the
+    /// instances with them).
+    pub meshes: bool,
+    /// Instances: their records and the top level over them.
+    pub instances: bool,
+    /// Materials: the instances' records.
     pub surfaces: bool,
     /// Volumes: their small BVH and records.
     pub volumes: bool,
@@ -47,9 +50,18 @@ pub struct Changed {
 }
 
 impl Changed {
+    /// Everything.
+    pub const ALL: Changed = Changed {
+        meshes: true,
+        instances: true,
+        surfaces: true,
+        volumes: true,
+        lights: true,
+    };
+
     /// Whether anything did.
     pub fn any(self) -> bool {
-        self.geometry || self.surfaces || self.volumes || self.lights
+        self.meshes || self.instances || self.surfaces || self.volumes || self.lights
     }
 }
 
@@ -79,7 +91,7 @@ impl Renderer {
     /// A renderer of an empty scene on `device` and `queue` (the host's own;
     /// wgpu handles are shared, not copied).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
-        let scene = GpuScene::new(device, &Scene::default());
+        let scene = GpuScene::new(device);
         Renderer {
             passes: Passes::new(device, &scene.layout),
             device: device.clone(),
@@ -104,18 +116,7 @@ impl Renderer {
 
     /// Takes `scene`, uploading what `changed` says.
     pub fn set_scene(&mut self, scene: &Scene, changed: Changed) {
-        let device = &self.device;
-        if changed.geometry {
-            self.scene.set_geometry(device, scene);
-        } else if changed.surfaces {
-            self.scene.set_surfaces(device, scene);
-        }
-        if changed.volumes {
-            self.scene.set_volumes(device, &scene.volumes);
-        }
-        if changed.lights {
-            self.scene.set_lights(device, &scene.lights);
-        }
+        self.scene.set(&self.device, scene, changed);
         self.generation += u64::from(changed.any());
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
     }
@@ -154,15 +155,14 @@ impl Renderer {
             viewport.groups = None;
         }
         let targets = viewport.targets.as_ref()?;
-        let geometry = &self.scene.geometry;
-        let frame = CameraFrame::new(camera, &film, geometry.bounds());
+        let frame = CameraFrame::new(camera, &film, self.scene.bounds());
         let lighting = Lighting {
             ambient: self.ambient,
             rims: self.rims,
             fog: self.fog,
             lights: self.scene.lights,
             volumes: self.scene.volumes,
-            extent: geometry.extent(),
+            extent: self.scene.extent(),
         };
         let uniform = Frame::new(&frame, view, settings, &lighting);
         (self.queue).write_buffer(&viewport.frame, 0, bytemuck::bytes_of(&uniform));

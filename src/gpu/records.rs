@@ -1,5 +1,5 @@
 //! What the passes read, as the shaders lay it out: the G-buffer's vertices,
-//! the object table, the BVH's surfaces, the lights, the volumes and the
+//! the instances, the lights, the volumes and the
 //! per-frame uniform. Each packs from the renderer's scene.
 //!
 //! Each light kind lights a white Lambert surface as the direct pass reads it:
@@ -14,44 +14,58 @@
 use crate::render::camera::CameraFrame;
 use crate::render::settings::{MAX_LEVELS, Settings};
 use crate::render::vector::V3;
-use crate::render::{Ambient, Fog, Light, LightShape, Rims, Volume, dither};
+use crate::render::{Ambient, Fog, Instance, Light, LightShape, Rims, Surface, Volume, dither};
 use bytemuck::{Pod, Zeroable};
 
-/// A G-buffer vertex: one per triangle corner, world space.
+/// A G-buffer vertex: one per triangle corner, in its mesh's own space.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Vertex {
-    /// World position.
+    /// Its position.
     pub position: [f32; 3],
-    /// Index into the object table.
-    pub object: u32,
-    /// World shading normal (not unit).
+    /// Its shading normal (not unit).
     pub normal: [f32; 3],
     /// What the material's color is multiplied by.
     pub tint: [f32; 3],
 }
 
-/// An object table entry (`Object` in common.wgsl): a mesh's material and id.
+/// An instance as the passes read it (`Instance` in common.wgsl): its
+/// placement both ways, its material and ids.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct Object {
+pub struct GpuInstance {
+    /// Own space to world: three rows.
+    pub to_world: [[f32; 4]; 3],
+    /// World to own space: three rows (NaN for a flat placement, which no
+    /// ray enters).
+    pub to_own: [[f32; 4]; 3],
     /// rgb: the material's color.
     pub albedo: [f32; 4],
     /// rgb: what it lets through.
     pub transmit: [f32; 4],
-    /// x: the object id.
+    /// x: the object id; y: its mesh's BVH root node.
     pub id: [u32; 4],
 }
 
-/// What a ray hitting a BVH triangle shades with (`Surface` in bvh.wgsl):
-/// its object and its corners' mean tint, in the BVH's order.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct Surface {
-    /// The mean of its corners' tints.
-    pub tint: [f32; 3],
-    /// Index into the object table.
-    pub object: u32,
+impl GpuInstance {
+    /// `instance` packed, its mesh's BVH rooted at node `root`, shading as
+    /// `surface`.
+    pub fn of(instance: &Instance, root: u32, surface: Surface) -> GpuInstance {
+        let mut packed = GpuInstance {
+            to_world: instance.to_world,
+            to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
+            id: [instance.id, root, 0, 0],
+            ..GpuInstance::default()
+        };
+        packed.set_surface(surface);
+        packed
+    }
+
+    /// Shades as `surface`.
+    pub fn set_surface(&mut self, surface: Surface) {
+        self.albedo = V3::of(surface.color).with_w(0.0);
+        self.transmit = V3::of(surface.transmittance()).with_w(0.0);
+    }
 }
 
 /// Kind codes (`normal.w` of a light).

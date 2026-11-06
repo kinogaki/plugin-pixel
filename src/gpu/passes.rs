@@ -32,8 +32,11 @@ pub struct Groups {
     shade: wgpu::BindGroup,
 }
 
-const ATTRIBUTES: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Uint32, 2 => Float32x3, 3 => Float32x3];
+/// A vertex's position, normal and tint.
+const ATTRIBUTES: [wgpu::VertexAttribute; 3] =
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3];
+/// The instance a drawn instance is.
+const INSTANCE: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Uint32];
 
 /// The G-buffer's raster pipeline: five targets, reversed depth, both sides.
 fn gbuffer(
@@ -65,11 +68,18 @@ fn gbuffer(
             module: &module,
             entry_point: Some("vs"),
             compilation_options: Default::default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: std::mem::size_of::<Vertex>() as u64,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &ATTRIBUTES,
-            })],
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &ATTRIBUTES,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<u32>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &INSTANCE,
+                }),
+            ],
         },
         primitive: wgpu::PrimitiveState {
             cull_mode: None,
@@ -293,7 +303,7 @@ impl Passes {
     }
 
     /// The G-buffer: every target cleared (ids to `MISS`, depth to the far
-    /// plane, 0: depth is reversed), then the triangles drawn.
+    /// plane, 0: depth is reversed), then each mesh drawn for its instances.
     fn draw_gbuffer(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -335,13 +345,16 @@ impl Passes {
             }),
             ..Default::default()
         });
-        if scene.vertex_count == 0 {
+        if scene.instances.draws.is_empty() {
             return;
         }
         pass.set_pipeline(&self.gbuffer);
         pass.set_bind_group(0, group, &[]);
         pass.set_bind_group(1, &scene.group, &[]);
         pass.set_vertex_buffer(0, scene.vertices.slice(..));
-        pass.draw(0..scene.vertex_count, 0..1);
+        pass.set_vertex_buffer(1, scene.drawn.slice(..));
+        for (vertices, instances) in &scene.instances.draws {
+            pass.draw(vertices.clone(), instances.clone());
+        }
     }
 }

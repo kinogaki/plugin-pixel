@@ -1,8 +1,9 @@
-//! A binned-SAH bounding volume hierarchy over world-space triangles, in
-//! the flat layout `shaders/bvh.wgsl` traverses.
+//! Binned-SAH bounding volume hierarchies in the flat layout
+//! `shaders/bvh.wgsl` traverses, two levels of them: a [`Bvh`] over each
+//! mesh's triangles in its own space, built when the mesh is made, and a
+//! [`Tlas`] over the instances placing the meshes, built when one moves.
 //!
-//! Built on the CPU when geometry changes (never per frame) and uploaded as
-//! two storage buffers. Nodes are depth-first with siblings side by side:
+//! Built on the CPU (never per frame) and uploaded as storage buffers. Nodes are depth-first with siblings side by side:
 //! an interior node's children are `a` and `a + 1`; a leaf holds `count`
 //! triangles from `a`. The tests trace it on the CPU as `bvh.wgsl` does.
 
@@ -89,7 +90,8 @@ impl Bounds {
 }
 
 impl Bvh {
-    /// The hierarchy over `triangles` (world-space corners).
+    /// The hierarchy over `triangles` (corners in the space the rays it
+    /// traces come in: a mesh's own).
     pub fn build(triangles: &[[[f32; 3]; 3]]) -> Bvh {
         if triangles.is_empty() {
             return Bvh {
@@ -101,10 +103,7 @@ impl Bvh {
                 order: Vec::new(),
             };
         }
-        let corners: Vec<[V3; 3]> = triangles
-            .iter()
-            .map(|t| t.map(|p| V3::new(p[0], p[1], p[2])))
-            .collect();
+        let corners: Vec<[V3; 3]> = triangles.iter().map(|t| t.map(V3::of)).collect();
         let boxes: Vec<Bounds> = corners
             .iter()
             .map(|c| {
@@ -113,65 +112,113 @@ impl Bvh {
                 b
             })
             .collect();
-        let centroids: Vec<V3> = boxes.iter().map(|b| (b.min + b.max) * 0.5).collect();
-        let mut index: Vec<u32> = (0..triangles.len() as u32).collect();
-        let mut nodes = vec![Node::default()];
-        // (node, start, end, depth) still to split.
-        let mut todo = vec![(0usize, 0usize, index.len(), 0u32)];
-        while let Some((node, start, end, depth)) = todo.pop() {
-            let mut bounds = Bounds::EMPTY;
-            let mut centre = Bounds::EMPTY;
-            for &i in &index[start..end] {
-                bounds.join(&boxes[i as usize]);
-                centre.grow(centroids[i as usize]);
-            }
-            nodes[node].min = bounds.min.to_array();
-            nodes[node].max = bounds.max.to_array();
-            let count = end - start;
-            let split = if count <= 2 || depth >= MAX_DEPTH {
-                None
-            } else {
-                split(&mut index[start..end], &boxes, &centroids, &centre, &bounds)
-            };
-            match split {
-                Some(mid) => {
-                    let left = nodes.len();
-                    nodes.push(Node::default());
-                    nodes.push(Node::default());
-                    nodes[node].a = left as u32;
-                    nodes[node].count = 0;
-                    todo.push((left + 1, start + mid, end, depth + 1));
-                    todo.push((left, start, start + mid, depth + 1));
-                }
-                None => {
-                    nodes[node].a = start as u32;
-                    nodes[node].count = count as u32;
-                }
-            }
-        }
-        let triangles = index
+        let (nodes, order) = tree(&boxes);
+        let triangles = order
             .iter()
             .map(|&i| {
                 let [a, b, c] = corners[i as usize];
-                let w = |v: V3| [v.x, v.y, v.z, 0.0];
                 Triangle {
-                    v0: w(a),
-                    e1: w(b - a),
-                    e2: w(c - a),
+                    v0: a.with_w(0.0),
+                    e1: (b - a).with_w(0.0),
+                    e2: (c - a).with_w(0.0),
                 }
             })
             .collect();
         Bvh {
             nodes,
             triangles,
-            order: index,
+            order,
         }
     }
 
-    /// The scene's bounds (min, max); a point at the origin when empty.
+    /// Its bounds (min, max); a point at the origin when empty.
     pub fn bounds(&self) -> ([f32; 3], [f32; 3]) {
         (self.nodes[0].min, self.nodes[0].max)
     }
+}
+
+/// The top level over the instances of meshes: nodes as [`Bvh`]'s, a leaf
+/// holding `count` instances from `a` in [`Tlas::order`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tlas {
+    /// The nodes, root first. Never empty: with no instances, one leaf of
+    /// empty bounds, which no ray enters.
+    pub nodes: Vec<Node>,
+    /// Each leaf entry's instance.
+    pub order: Vec<u32>,
+}
+
+impl Tlas {
+    /// The top level over the instances' world bounds `boxes` (min, max).
+    pub fn build(boxes: &[([f32; 3], [f32; 3])]) -> Tlas {
+        if boxes.is_empty() {
+            let empty = Node {
+                min: [f32::INFINITY; 3],
+                max: [f32::NEG_INFINITY; 3],
+                a: 0,
+                count: 1,
+            };
+            return Tlas {
+                nodes: vec![empty],
+                order: Vec::new(),
+            };
+        }
+        let boxes: Vec<Bounds> = (boxes.iter())
+            .map(|&(min, max)| Bounds {
+                min: V3::of(min),
+                max: V3::of(max),
+            })
+            .collect();
+        let (nodes, order) = tree(&boxes);
+        Tlas { nodes, order }
+    }
+
+    /// The instances' bounds (min, max); none without instances.
+    pub fn bounds(&self) -> Option<([f32; 3], [f32; 3])> {
+        (!self.order.is_empty()).then(|| (self.nodes[0].min, self.nodes[0].max))
+    }
+}
+
+/// The nodes over `boxes` (not empty), depth-first with siblings side by
+/// side, and each leaf entry's index in `boxes`.
+fn tree(boxes: &[Bounds]) -> (Vec<Node>, Vec<u32>) {
+    let centroids: Vec<V3> = boxes.iter().map(|b| (b.min + b.max) * 0.5).collect();
+    let mut index: Vec<u32> = (0..boxes.len() as u32).collect();
+    let mut nodes = vec![Node::default()];
+    // (node, start, end, depth) still to split.
+    let mut todo = vec![(0usize, 0usize, index.len(), 0u32)];
+    while let Some((node, start, end, depth)) = todo.pop() {
+        let mut bounds = Bounds::EMPTY;
+        let mut centre = Bounds::EMPTY;
+        for &i in &index[start..end] {
+            bounds.join(&boxes[i as usize]);
+            centre.grow(centroids[i as usize]);
+        }
+        nodes[node].min = bounds.min.to_array();
+        nodes[node].max = bounds.max.to_array();
+        let count = end - start;
+        let split = if count <= 2 || depth >= MAX_DEPTH {
+            None
+        } else {
+            split(&mut index[start..end], boxes, &centroids, &centre, &bounds)
+        };
+        match split {
+            Some(mid) => {
+                let left = nodes.len();
+                nodes.push(Node::default());
+                nodes.push(Node::default());
+                nodes[node].a = left as u32;
+                nodes[node].count = 0;
+                todo.push((left + 1, start + mid, end, depth + 1));
+                todo.push((left, start, start + mid, depth + 1));
+            }
+            None => {
+                nodes[node].a = start as u32;
+                nodes[node].count = count as u32;
+            }
+        }
+    }
+    (nodes, index)
 }
 
 /// Partitions `index` by the cheapest binned SAH split and returns the
@@ -476,6 +523,65 @@ mod tests {
                 assert_eq!(bvh.occluded(o, d, t_max), want.is_some());
             }
         }
+    }
+
+    /// Meshes placed by moves, traced through the top level and each
+    /// instance's own BVH (the ray taken into its own space, `t` unchanged,
+    /// as `bvh.wgsl` does), hit what the world's triangles all together hit.
+    #[test]
+    fn two_levels_trace_as_the_world_does() {
+        let mut rng = Rng(7);
+        let meshes: Vec<Vec<[[f32; 3]; 3]>> = (0..3).map(|_| soup(&mut rng, 40)).collect();
+        let bvhs: Vec<Bvh> = meshes.iter().map(|m| Bvh::build(m)).collect();
+        // (mesh, move) for each instance.
+        let placed: Vec<(usize, [f32; 3])> = (0..12).map(|k| (k % 3, rng.point(8.0))).collect();
+        let shifted = |p: [f32; 3], by: [f32; 3]| std::array::from_fn(|k| p[k] + by[k]);
+        let world: Vec<[[f32; 3]; 3]> = (placed.iter())
+            .flat_map(|&(m, by)| meshes[m].iter().map(move |t| t.map(|p| shifted(p, by))))
+            .collect();
+        let boxes: Vec<_> = (placed.iter())
+            .map(|&(m, by)| {
+                let (lo, hi) = bvhs[m].bounds();
+                (shifted(lo, by), shifted(hi, by))
+            })
+            .collect();
+        let tlas = Tlas::build(&boxes);
+        let traced = |o: [f32; 3], d: [f32; 3], t_max: f32| -> Option<f32> {
+            let (o3, d3) = (V3::of(o), V3::of(d));
+            let mut best: Option<f32> = None;
+            let mut stack = vec![0u32];
+            while let Some(n) = stack.pop() {
+                let node = &tlas.nodes[n as usize];
+                if !hits_box(node, o3, V3::ONE / d3, best.unwrap_or(t_max)) {
+                    continue;
+                }
+                if node.count == 0 {
+                    stack.extend([node.a, node.a + 1]);
+                    continue;
+                }
+                for k in node.a..node.a + node.count {
+                    let (m, by) = placed[tlas.order[k as usize] as usize];
+                    let own = shifted(o, by.map(|v| -v));
+                    if let Some(hit) = bvhs[m].intersect(own, d, best.unwrap_or(t_max)) {
+                        best = Some(hit.t);
+                    }
+                }
+            }
+            best
+        };
+        for _ in 0..2000 {
+            let o = rng.point(14.0);
+            let target = rng.point(8.0);
+            let d = [target[0] - o[0], target[1] - o[1], target[2] - o[2]];
+            let want = brute(&world, o, d, 1.5).map(|h| h.t);
+            let got = traced(o, d, 1.5);
+            match (want, got) {
+                (None, None) => {}
+                (Some(w), Some(g)) => assert!((w - g).abs() < 1e-4, "{w} against {g}"),
+                _ => panic!("brute {want:?}, two levels {got:?}"),
+            }
+        }
+        assert_eq!(Tlas::build(&[]).bounds(), None);
     }
 
     /// Three parallel cards across a ray, each two triangles: a ray keeps
