@@ -1,44 +1,28 @@
-[workspace]
-resolver = "3"
-members = ["crates/*"]
+[package]
+name = "kinogaki-pixel"
+description = "Pixel, the realtime pixel-art render engine, as a render engine on the Kinogaki Studio SDK: its renderer (film, camera, BVH, dither, the passes on a wgpu host's own device), its description, material nodes, lights, fog, scene sync and render thread"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license = "MIT OR Apache-2.0"
 
-[workspace.package]
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.98"
-publish = false
+[lints]
+workspace = true
 
-[workspace.dependencies]
-kinogaki-pixel-render = { path = "crates/pixel" }
-kinogaki-pixel-render-wgpu = { path = "crates/wgpu" }
-# The render interface: studio-sdk's leaf crate (std only; its `wgpu`
-# feature adds the display contract).
-kinogaki-render-api = { git = "https://github.com/kinogaki/studio-sdk.git", rev = "2312c549722d5156e2a35a71e70ad38544fb8033" }
-# The host's GPU API, at the exact version studio-sdk pins, so the renderer
-# can share the host's device.
-wgpu = "=30.0.1"
-bytemuck = { version = "1.25", features = ["derive"] }
+[dependencies]
+kinogaki-studio-api = { workspace = true, features = ["wgpu"] }
+kinogaki-render-api = { workspace = true, features = ["wgpu"] }
+# The records the GPU reads, laid out as the shaders read them.
+bytemuck.workspace = true
 
-[workspace.lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
-
-[workspace.lints.clippy]
-dbg_macro = "deny"
-todo = "deny"
-
-[profile.dev]
-opt-level = 1
-
-[profile.dev.package."*"]
-opt-level = 2
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-debug = "line-tables-only"
-overflow-checks = true
-
-# BVH checks and the GPU tests' CPU references run many iterations.
-[profile.test]
-opt-level = 2
+[dev-dependencies]
+# The editor offscreen.
+kinogaki-harness.workspace = true
+# What the example is modelled in.
+kinogaki-mesh.workspace = true
+kinogaki-mesh-kernel.workspace = true
+# Reference images.
+kinogaki-png.workspace = true
+# The GPU tests' turns on the one GPU.
+kinogaki-gpu-turns.workspace = true

@@ -1,56 +1,57 @@
-# Pixel plugin (frozen)
+# Pixel
 
-Pixel is a realtime pixel-art render engine for [Kinogaki Studio](https://github.com/kinogaki). It renders on the host's own wgpu device (wgpu 30.0.1) at a coarse film resolution, lights it with ray-traced occlusion, shadows, one bounce and volumes, quantizes and dithers the light through a shade ramp, and upscales the result with nearest sampling to the view.
+Pixel is a realtime pixel-art render engine for [Kinogaki Studio](https://github.com/kinogaki), Studio's second render engine. It renders on the host's own wgpu device at a coarse film resolution, lights the film with ray-traced ambient occlusion, hard shadows, one bounce of diffuse light and volumes, quantizes and dithers the light through a Shade Ramp, and repeats each film pixel over its block of the view. Inputs and outputs are linear ACEScg.
 
-Frozen in the Kinogaki Studio tree: outside the build, never built, edited or checked there. Pixel is Studio's second render engine, public and open source; it comes back written fresh on the current SDK as its own plugin, and this code stays only as source to take from (the root's `docs/PLUGINS.md`, Frozen plugins). What follows describes the code as it was frozen.
+It is a plugin on Studio's public SDK (`kinogaki-studio-api`, `kinogaki-render-api` with its `wgpu` feature) and builds inside the Studio tree: the library crate `kinogaki-pixel` holds the engine, and `plugin/` (`kinogaki-plugin-pixel`) is the dylib Studio loads, `renders/pixel.dylib`.
 
-It is written only against the render interface, `kinogaki-render-api` from [studio-sdk](https://github.com/kinogaki/studio-sdk) (with its `wgpu` feature for the display contract), and depends on nothing else from Kinogaki. Its other dependencies are `wgpu` and `bytemuck` from crates.io.
+## A frame
 
-A frame renders at `ceil(view / pixel_size)` and runs seven GPU passes: G-buffer (raster; albedo is the Pixel Surface's Color times the mesh's color attribute where it has one, and the transmittance its Translucency gives), ambient light (the domes', a dome's ground color below the horizon; no dome, none) × ray-traced AO shaped by AO Strength and Power, direct light from area, distant and spot lights with ray-traced hard shadows, optional gobos and light through translucent back faces (shadow rays keep the product of the transmittances of the thin translucent surfaces they cross, so light dapples through foliage; a mesh's shading normals, authored ones included, set the cosine; a shadow ray first steps a little toward its light, so a thin card shaded by a normal leaning past its own plane, such as Crown Normal's foliage, does not shadow itself) (darkened by AO as AO on Direct asks), one bounce of diffuse light (GI: a fixed pattern of rays a pixel, each hit lit as the direct pass lights, × its albedo), all ray traced against a BVH built on the CPU when geometry changes, volume (each camera ray marched through Pixel Volumes, closed meshes found by their crossings in a small BVH of their own and never drawn, and through the scene's Fog prim when In-scatter lights it: a fixed jitter a pixel, each step lit by the lights with shadow rays, so surfaces cut light shafts, gobos and the ambient light × one sky ray; written as light and opacity, premultiplied), shade (rim lights, quantize and dither through the Shade Ramp, the volumes over it, `L_surface · T + L` with the opacity and the media's light (through the ramp) on Volume Levels, dithered at Volume Dither so only the bands' edges dither, then unlit height fog on the same bands), and a nearest upscale to the view. Cameras are perspective or orthographic. Inputs and outputs are linear ACEScg.
+A view of `w × h` pixels renders a film of `ceil(w / s) × ceil(h / s)` pixels, `s` the Pixel Size; film pixel `(i, j)` covers view pixels `[i·s, (i+1)·s) × [j·s, (j+1)·s)` from the view's top-left corner, so the grid stays locked to the view. Seven passes:
 
-| Crate | Role |
+1. **G-buffer** (raster): albedo (the Pixel Surface's Color × the attribute its Color Attribute names), normal, depth, object id and the surface's transmittance.
+2. **Ambient**: the domes' light from above and below the horizon (a dome's ground color), blended by how far the surface faces up, × ambient occlusion from a fixed pattern of hemisphere rays, shaped by AO Strength and AO Power.
+3. **Direct**: each light with one hard shadow ray: area lights and spots as points at their centres, distant lights as parallel light; spots fade over their cone; a gobo dapples distant lights and spots. Light reaching a translucent surface's back comes through × its transmittance, and a shadow ray keeps what the thin surfaces it crosses let through. AO on Direct darkens it by the AO.
+4. **Bounce**: one diffuse bounce, GI Samples rays a pixel in the same fixed pattern up to GI Distance, each hit lit as the direct pass lights it, × its albedo, × GI.
+5. **Volume**: each camera ray marched through the Pixel Volumes it crosses (closed meshes found by their crossings) and, when In-scatter is on, the fog, at a fixed jitter a pixel; each step lit by the lights with shadow rays (surfaces cut light shafts), the gobos and the domes × one sky ray.
+6. **Shade**: the light (direct + ambient + bounce + the rim lights) quantized by its luminance to Shade Levels with an ordered Bayer dither between adjacent levels, each level its Shade Ramp color in the light's chromaticity, × albedo; the volumes over it on their own levels (Volume Levels, Volume Dither); then flat height fog.
+7. **Upscale**: each film pixel repeated over its block of the view.
+
+Every pass is deterministic: a frame of the same scene and view is the same image. A view renders once when something it shows changes, then rests.
+
+## Materials, lights and fog
+
+- **Pixel Surface**: Color, Color Attribute (`Cd`), Translucency, Translucency Color. **Pixel Volume**: Density, Scatter Color, Anisotropy, Edge Falloff, Shadows, Emission and Noise. Pixel has no node graph: each node is a material on its own. The shaded viewport shows a surface's color (× its attribute) and a volume as a ghost of its bounds; another engine's material renders as a Pixel Surface of its color.
+- **Lights** (`kinogaki.pixel.light`): UsdLux's area, dome, distant and spot lights (distant lights and spots with a Gobo section), and the **Rim Light**, a Fresnel-like edge, `(1 − n·v)⁴` × its emission, where direct light reaches (Lit) or all round (All).
+- **Fog** (`kinogaki.pixel.fog`): exponential height fog, flat, or lit and marched with the volumes when In-scatter is on.
+- Starting materials: Grass, Stone, Clay, Fog Volume, Mist.
+
+## Outputs
+
+Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occlusion, Depth, Normal and Object ID, each a film-size texture; a final render reads them at the view's size. A compositing host takes the film (`Display::acquire_film`): the beauty and the outputs it asks for, kept from a later frame on.
+
+## Code
+
+| Module | Role |
 |---|---|
-| `kinogaki-pixel-render` (`crates/pixel`) | No device: the engine description (`description()`: settings, the prim types it declares, the Pixel Surface and Pixel Volume vocabulary, presets, outputs), the scene store the render interface's prims make, film, camera, BVH, geometry and dither |
-| `kinogaki-pixel-render-wgpu` (`crates/wgpu`) | The passes (`Renderer`, a `Viewport` a view), the `RenderEngine` on its render thread, its `Display` and `Pixel` (a `kinogaki_render_api::display::Engine`) |
-
-| Module (`kinogaki-pixel-render`) | Role |
-|---|---|
-| `description`, `material`, `settings` | What hosts read: the engine, Pixel Surface, Pixel Volume and Pixel Render Settings (Pixels, Ambient Occlusion, Global Illumination, Volumes; the Shade Ramp). Light comes from the scene: the render interface's standard lights and fog, which it declares, and its own Rim Light type (`kinogaki.pixel.rim_light`) |
-| `volume`, `media` | The Pixel Volume's medium (density, scatter color, anisotropy, emission, noise, edge falloff, shadows), its density field and phase as the GPU mirrors them; the volumes' records and BVH |
-| `store` | Prims to the scene (emitters' blackbodies and CIE illuminants as ACEScg colors), saying what changed (only geometry rebuilds the BVH; triangles naming a Pixel Volume become a volume); domes add up into the ambient light, rim lights into the rim by side, the first Fog prim is the fog |
-| `tint` | A mesh's color attribute (`Cd`, or the name a Pixel Surface's Color Attribute gives) as corner tints its Color is multiplied by: point and vertex values blend across a triangle, primitive values are flat |
-| `scene` | Meshes, volumes, Pixel Surface materials, lights, the dome; the camera is the render interface's |
-| `lights`, `gobo`, `rim` | Lights packed for the direct and bounce passes (each kind's falloff and brightness); the gobo (`kinogaki.pixel.gobo`, applied to distant lights and spots) and its noise; the rim light type |
-| `hemisphere` | The fixed cosine-weighted ray pattern AO and GI share |
-| `shading` | The lighting's and shade pass's CPU definitions: AO's shaping, the Shade Ramp's levels, rim, volumes over surfaces and fog |
-| `film`, `camera` | Film sizing, the view ↔ film mapping, the frustum or box that locks the grid to the view |
-| `math`, `bvh`, `geometry` | The vectors and matrices it computes with (plain IEEE arithmetic in a fixed order); the binned-SAH BVH in the GPU's layout; meshes flattened to world space, and each BVH triangle's surface (object, mean tint) for bounce hits |
-| `dither`, `aov` | Bayer matrices and the shade function the GPU mirrors; the outputs |
-
-| Module (`kinogaki-pixel-render-wgpu`) | Role |
-|---|---|
-| `gpu` | The renderer: buffers, a view's targets and images, the passes, read-back and timestamps |
-| `engine`, `worker` | The engine's handle and its render thread |
-| `ring`, `display` | A view's three display images, pinned while a host shows one, each with film-size copies of its frame's beauty and the outputs a compositing host asked for (`Display::acquire_film`) |
-| `outputs` | Final frames' outputs at the view's size |
-
-## Building
-
-A plain clone builds with a stable Rust toolchain (1.98 or later); Cargo fetches studio-sdk at the revision `Cargo.toml` pins and the rest from crates.io.
-
-```sh
-cargo build --workspace
-```
+| `render` | The renderer, knowing no SDK: the scene in world space, `film`, `camera`, `bvh` (binned SAH, built on the CPU when geometry changes), `dither`, `settings`, `spectrum` (blackbodies and CIE illuminants as ACEScg) |
+| `gpu` | The passes on the host's device, their records and shaders (`gpu/shaders`) |
+| `description`, `settings`, `outputs` | What a host reads: capabilities, settings, outputs |
+| `nodes`, `presets` | Pixel Surface and Pixel Volume, their display approximation and translation; the starting materials |
+| `lights` | The light and fog types and kinds; emissions as colors |
+| `sync` | The host's prims as the scene: shapes and instances flattened by material, volumes, lights |
+| `engine` | The render thread, the display images, final reads and previews |
 
 ## Checks
 
+From the Studio tree's root:
+
 ```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
-cargo test --workspace --locked -- --ignored     # GPU tests; PNGs go to PIXEL_RENDER_OUT (default: ../out beside the checkout)
-cargo test --release --test timing -- --ignored --nocapture
+python3 tools/check_all.py --changed
+cargo test -p kinogaki-pixel --test gpu -- --ignored   # the GPU tests
 ```
 
-The GPU tests need an adapter (Metal on macOS); they render small scenes and check them against CPU references.
+`PIXEL_REFERENCES=1` writes the example's reference image (`tests/references/example.png`) instead of comparing with it.
+
+## License
+
+Pixel is dual-licensed under the MIT license ([LICENSE-MIT](LICENSE-MIT)) and the Apache License 2.0 ([LICENSE-APACHE](LICENSE-APACHE)), at your option.

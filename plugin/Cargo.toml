@@ -1,10 +1,11 @@
 [package]
 name = "kinogaki-plugin-pixel"
-description = "Pixel, the realtime pixel-art renderer, as Studio's plugin renders/pixel.dylib"
+description = "Pixel as Studio's plugin renders/pixel.dylib"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+license = "MIT OR Apache-2.0"
 
 [lib]
 crate-type = ["dylib"]
@@ -15,14 +16,5 @@ workspace = true
 [dependencies]
 # The shared crates' one build: the package and the engine cross as its types.
 kinogaki-shared.workspace = true
-kinogaki-studio-api = { workspace = true, features = ["wgpu"] }
-# The engine trait its description is read through (its vocabulary).
-kinogaki-render-api = { workspace = true, features = ["wgpu"] }
-kinogaki-pixel-render-wgpu.workspace = true
-
-[dev-dependencies]
-# The conformance suite's engine end: standard values rendered through
-# this engine on the GPU, against its goldens.
-kinogaki-testkit = { workspace = true, features = ["render"] }
-# The GPU device the engine is made on.
-wgpu.workspace = true
+kinogaki-studio-api.workspace = true
+kinogaki-pixel.workspace = true
