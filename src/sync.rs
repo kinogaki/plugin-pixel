@@ -21,19 +21,16 @@
 //!
 //! What it can't render as sent it says ([`Sync::problems`]): volumes past
 //! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
-//! make: it places nothing there), an illuminant Pixel's table lacks, a
-//! material node it doesn't declare.
+//! make: it places nothing there), a material node it doesn't declare.
 use crate::gpu::Changed;
 use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Material};
 use crate::render::{Ambient, Fog, Light, LightShape, Mesh, Rims, Scene, Surface, Volume};
-use kinogaki_render_api::geometry::{
-    Attribute, Diagnostic, Domain, UpAxis, Values, Vec3, Xform, names,
-};
+use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
 use kinogaki_render_api::standard::{self, Shape as LightKind};
 use kinogaki_render_api::{
-    Declared, Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
+    Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -61,41 +58,6 @@ struct Problems {
 /// Three rows of `x` in single precision.
 fn rows(x: &Xform) -> [[f32; 4]; 3] {
     x.rows().map(|r| r.map(|v| v as f32))
-}
-
-/// Item `i` of `attribute` as a color: its first three numbers (one spread
-/// to grey); none for text or arrays.
-fn rgb(attribute: &Attribute, i: usize) -> Option<[f32; 3]> {
-    if attribute.offsets().is_some() {
-        return None;
-    }
-    let width = attribute.values().len() / attribute.items().max(1);
-    let at = |k: usize| i * width + k.min(width - 1);
-    let read = |k: usize| -> Option<f32> {
-        Some(match attribute.values() {
-            Values::F32(c) => *c.get(at(k))?,
-            Values::F64(c) => *c.get(at(k))? as f32,
-            Values::I32(c) => *c.get(at(k))? as f32,
-            Values::I64(c) => *c.get(at(k))? as f32,
-            _ => return None,
-        })
-    };
-    Some([read(0)?, read(1)?, read(2)?])
-}
-
-/// `shape`'s primvar `name` at each triangle corner, in triangle order.
-fn per_corner(shape: &Shape, triangles: &[[u32; 3]], name: &str) -> Option<Vec<[f32; 3]>> {
-    let (domain, attribute) = shape.primvar(name)?;
-    let corner = |t: usize, k: usize| match domain {
-        Domain::Vertex => rgb(attribute, 3 * t + k),
-        Domain::Point => rgb(attribute, triangles[t][k] as usize),
-        Domain::Primitive => rgb(attribute, t),
-        _ => rgb(attribute, 0),
-    };
-    (0..triangles.len())
-        .flat_map(|t| (0..3).map(move |k| (t, k)))
-        .map(|(t, k)| corner(t, k))
-        .collect()
 }
 
 /// What a batch touched.
@@ -135,10 +97,7 @@ impl Sync {
 
     /// The world's up direction.
     pub fn up(&self) -> [f32; 3] {
-        match self.settings.units.up() {
-            UpAxis::Z => [0.0, 0.0, 1.0],
-            _ => [0.0, 1.0, 0.0],
-        }
+        self.settings.units.up().direction().to_f32()
     }
 
     /// Applies `update`, saying what of the scene changed.
@@ -307,14 +266,8 @@ impl Sync {
         let world: Vec<[f32; 3]> = (shape.points().iter())
             .map(|p| at.apply_point(Vec3::from(p.map(f64::from))).to_f32())
             .collect();
-        let normals = per_corner(shape, triangles, names::N).map(|n| {
-            let inverse = at.inverse().unwrap_or(Xform::IDENTITY);
-            let r = inverse.rows();
-            let turned = |v: [f32; 3]| -> [f32; 3] {
-                std::array::from_fn(|i| {
-                    (0..3).map(|j| r[j][i] * f64::from(v[j])).sum::<f64>() as f32
-                })
-            };
+        let normals = shape.corners::<3>(triangles, names::N).map(|n| {
+            let turned = |v: [f32; 3]| at.apply_normal(Vec3::from(v.map(f64::from))).to_f32();
             n.into_iter().map(turned).collect::<Vec<_>>()
         });
         // Triangles by the material they render with.
@@ -342,7 +295,7 @@ impl Sync {
                 Material::Surface(_, attribute) => {
                     let tints = attribute
                         .as_ref()
-                        .and_then(|a| per_corner(shape, triangles, a));
+                        .and_then(|a| shape.corners::<3>(triangles, a));
                     let surface = material_id
                         .and_then(|m| self.materials.get(&m))
                         .map_or(u32::MAX, |m| m.1);
@@ -384,11 +337,11 @@ impl Sync {
             if !prim.visibility.visible {
                 continue;
             }
-            if &*prim.type_id == standard::FOG {
-                fog = fog.or_else(|| Some(fog_of(prim)));
+            if let Some(standard) = standard::Fog::decode(prim) {
+                fog = fog.or_else(|| Some(fog_of(standard)));
                 continue;
             }
-            if &*prim.type_id == RIM_LIGHT {
+            if prim.type_id == RIM_LIGHT {
                 let side = if lights::rim_all_round(prim) {
                     &mut rims.all
                 } else {
@@ -507,15 +460,15 @@ fn volume(
     }
 }
 
-/// The fog `prim` describes.
-fn fog_of(prim: &Declared) -> Fog {
+/// The standard fog `fog` as Pixel renders it.
+fn fog_of(fog: standard::Fog) -> Fog {
     Fog {
-        color: prim.color("color"),
-        density: prim.float("density").max(0.0),
-        start: prim.float("start").max(0.0),
-        height: prim.float("height"),
-        falloff: prim.float("falloff").max(0.0),
-        lit: prim.bool("inscatter"),
-        anisotropy: prim.float("anisotropy").clamp(-0.9, 0.9),
+        color: fog.color,
+        density: fog.density,
+        start: fog.start,
+        height: fog.height,
+        falloff: fog.falloff,
+        lit: fog.inscatter,
+        anisotropy: fog.anisotropy,
     }
 }

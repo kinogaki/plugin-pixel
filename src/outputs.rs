@@ -4,6 +4,9 @@
 use kinogaki_render_api::aov::standard;
 use kinogaki_render_api::{Aov, AovClass};
 
+/// Pixel's own output: the domes' and rims' light.
+const AMBIENT: &str = "ambient";
+
 /// An output a frame writes, each a film-size texture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Output {
@@ -47,16 +50,16 @@ impl Output {
     /// Its id in files.
     pub fn id(self) -> &'static str {
         match self {
-            Output::Beauty => "beauty",
-            Output::Albedo => "albedo",
-            Output::Direct => "direct",
-            Output::Ambient => "ambient",
-            Output::Indirect => "indirect",
-            Output::Volume => "volume",
-            Output::Occlusion => "occlusion",
-            Output::Depth => "depth",
-            Output::Normal => "normal",
-            Output::ObjectId => "objectId",
+            Output::Beauty => standard::BEAUTY,
+            Output::Albedo => standard::ALBEDO,
+            Output::Direct => standard::DIRECT,
+            Output::Ambient => AMBIENT,
+            Output::Indirect => standard::INDIRECT,
+            Output::Volume => standard::VOLUME,
+            Output::Occlusion => standard::OCCLUSION,
+            Output::Depth => standard::DEPTH,
+            Output::Normal => standard::NORMAL,
+            Output::ObjectId => standard::OBJECT_ID,
         }
     }
 
@@ -92,7 +95,7 @@ impl Output {
     /// It as the SDK describes it: a standard output, or Ambient, Pixel's own.
     pub fn aov(self) -> Aov {
         match self {
-            Output::Ambient => Aov::new("ambient", "Ambient Light", AovClass::Color),
+            Output::Ambient => Aov::new(AMBIENT, "Ambient Light", AovClass::Color),
             other => standard::get(other.id()).expect("a standard output"),
         }
     }

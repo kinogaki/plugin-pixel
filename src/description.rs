@@ -37,12 +37,13 @@ pub fn description() -> EngineDescription {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kinogaki_render_api::PrimTypeId;
 
     #[test]
     fn it_declares_its_lights_the_fog_and_every_output() {
         let d = description();
         assert_eq!((&*d.label().clone(), d.id()), ("Pixel", ENGINE));
-        let ids: Vec<&str> = d.capabilities().types.iter().map(|t| &*t.id).collect();
+        let ids: Vec<PrimTypeId> = d.capabilities().types.iter().map(|t| t.id).collect();
         assert_eq!(ids.last(), Some(&standard::FOG));
         assert!(ids.contains(&lights::RIM_LIGHT));
         assert!(d.capabilities().aovs[0].aov.is_beauty());

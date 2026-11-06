@@ -3,10 +3,8 @@
 use crate::nodes::{SURFACE, VOLUME};
 use kinogaki_render_api::value::Value;
 use kinogaki_studio_api::network::{NewNode, NodeCreation};
+use kinogaki_studio_api::render::material_creation;
 use kinogaki_studio_api::{CreationId, NodeTypeId};
-
-/// Core's Material node: what holds a shading network.
-const MATERIAL: NodeTypeId = NodeTypeId::declared("kinogaki.core.material");
 
 /// A preset: its id, label, words search takes, node and values.
 struct Preset {
@@ -84,14 +82,11 @@ const PRESETS: [Preset; 5] = [
 pub fn creations() -> Vec<NodeCreation> {
     (PRESETS.iter())
         .map(|preset| {
-            let mut inside = NewNode::new(preset.node).displayed();
+            let mut inside = NewNode::new(preset.node);
             for (name, value) in preset.values {
                 inside = inside.with(*name, value.clone());
             }
-            NodeCreation::new(preset.id, preset.label, NewNode::new(MATERIAL))
-                .family("Pixel")
-                .aliases(preset.aliases.iter().copied())
-                .inside(inside)
+            material_creation(preset.id, preset.label, "Pixel", preset.aliases, inside)
         })
         .collect()
 }

@@ -16,7 +16,7 @@
 use crate::render::Gobo;
 use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, NumberLook, Value, ValueKind};
-use kinogaki_render_api::{Declared, PrimType, Role, SettingDescriptor, SettingGroup};
+use kinogaki_render_api::{Declared, PrimType, PrimTypeId, Role, SettingDescriptor, SettingGroup};
 use kinogaki_studio_api::ObjectKindId;
 use kinogaki_studio_api::render::DeclaredKind;
 
@@ -25,7 +25,7 @@ pub const LIGHT_KIND: ObjectKindId = ObjectKindId::declared("kinogaki.pixel.ligh
 /// The Fog kind's id.
 pub const FOG_KIND: ObjectKindId = ObjectKindId::declared("kinogaki.pixel.fog");
 /// The rim light's type.
-pub const RIM_LIGHT: &str = "kinogaki.pixel.rim_light";
+pub const RIM_LIGHT: PrimTypeId = PrimTypeId::declared("kinogaki.pixel.rim_light");
 
 /// The Gobo section's group.
 const GOBO: &str = "gobo";
@@ -110,7 +110,7 @@ fn rim_light() -> PrimType {
 pub fn light_types() -> Vec<PrimType> {
     let gobo = || SettingGroup::new(GOBO, "Gobo", false).open_when(Condition::when("gobo", true));
     (standard::lights().into_iter())
-        .map(|ty| match &*ty.id {
+        .map(|ty| match ty.id {
             standard::DISTANT_LIGHT | standard::SPOT_LIGHT => ty.group(gobo(), gobo_params()),
             _ => ty,
         })
@@ -166,7 +166,7 @@ mod tests {
     use super::*;
 
     fn declared(ty: &PrimType, values: &[(&str, Value)]) -> Declared {
-        let mut prim = Declared::new(&ty.id, ty.defaults());
+        let mut prim = Declared::new(ty.id, ty.defaults());
         for (name, v) in values {
             prim.values.insert((*name).to_owned(), v.clone());
         }
@@ -176,7 +176,7 @@ mod tests {
     #[test]
     fn distant_lights_and_spots_take_a_gobo_and_the_rim_comes_last() {
         let types = light_types();
-        let ids: Vec<&str> = types.iter().map(|t| &*t.id).collect();
+        let ids: Vec<PrimTypeId> = types.iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
             [

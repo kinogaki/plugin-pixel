@@ -206,7 +206,7 @@ fn lights_domes_rims_and_fog_light_the_scene() {
     .declared();
     let rim_type = light_types()
         .into_iter()
-        .find(|t| &*t.id == RIM_LIGHT)
+        .find(|t| t.id == RIM_LIGHT)
         .unwrap();
     let mut rim = Declared::new(RIM_LIGHT, rim_type.defaults());
     rim.values.insert("side".into(), standard::choice("all"));
