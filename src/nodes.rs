@@ -256,6 +256,13 @@ impl Values<'_> {
     }
 }
 
+/// The node `network` shows when Pixel doesn't declare it (it renders the
+/// default surface).
+pub fn foreign(network: &MaterialNetwork) -> Option<NodeTypeId> {
+    let node = network.output()?;
+    (node.def != SURFACE && node.def != VOLUME).then_some(node.def)
+}
+
 /// What `network` renders as: its shown node's material (a node it doesn't
 /// declare, or none: the default).
 pub fn material(network: &MaterialNetwork) -> Material {

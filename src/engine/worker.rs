@@ -23,6 +23,11 @@ struct View {
     viewport: Viewport,
     /// Which edit of the view the next frame shows.
     generation: u64,
+    /// The edit its viewport's film shows, once one rendered: what a read
+    /// answers with only while it is still the view's.
+    filmed: Option<u64>,
+    /// How often the host had dropped its id when it gave it.
+    drops: u64,
     /// It needs a frame.
     dirty: bool,
     paused: bool,
@@ -46,6 +51,10 @@ pub(super) struct Worker {
     previewed: Vec<PrimId>,
     /// Display image sets made so far.
     sets: u64,
+    /// What the scene can't render as sent, reported with the next frame;
+    /// and what was reported last, so each is said once.
+    problems: Vec<Diagnostic>,
+    said: Vec<Diagnostic>,
 }
 
 impl Worker {
@@ -69,6 +78,8 @@ impl Worker {
             readings: Vec::new(),
             previewed: Vec::new(),
             sets: 0,
+            problems: Vec::new(),
+            said: Vec::new(),
         }
     }
 
@@ -175,19 +186,19 @@ impl Worker {
             }
             None => {
                 let viewport = self.renderer.viewport();
+                let shared = lock(&self.shared);
                 let view = View {
                     desc,
                     settings,
                     viewport,
                     generation: 0,
+                    filmed: None,
+                    drops: shared.drops(id),
                     dirty: true,
                     paused: false,
-                    kept: lock(&self.shared)
-                        .kept
-                        .get(&id)
-                        .cloned()
-                        .unwrap_or_default(),
+                    kept: shared.kept.get(&id).cloned().unwrap_or_default(),
                 };
+                drop(shared);
                 self.views.insert(id, view);
             }
         }
@@ -200,6 +211,11 @@ impl Worker {
         };
         let changed = self.sync.apply(update);
         self.renderer.set_scene(self.sync.scene(), changed);
+        let problems = self.sync.problems();
+        if problems != self.said {
+            self.said.clone_from(&problems);
+            self.problems = problems;
+        }
         let up = self.sync.up();
         for view in self.views.values_mut() {
             view.settings.up = up;
@@ -294,6 +310,7 @@ impl Worker {
         // The frame is published once the GPU has finished it.
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
         view.dirty = false;
+        view.filmed = rendered.is_some().then_some(view.generation);
         if rendered.is_none() || id == PREVIEW {
             let mut shared = lock(&self.shared);
             if let Some(ring) = shared.rings.get_mut(&id) {
@@ -316,10 +333,17 @@ impl Worker {
             stats: RenderStats {
                 samples: 1,
                 target: 1,
+                problems: std::mem::take(&mut self.problems),
                 ..RenderStats::default()
             },
         });
         let mut shared = lock(&self.shared);
+        if shared.drops(id) != view.drops {
+            // Dropped while it rendered: its frame is no one's, its problems
+            // the next one's.
+            self.problems.clone_from(&frame.stats.problems);
+            return;
+        }
         if let Some(ring) = shared.rings.get_mut(&id).filter(|r| r.set == set) {
             ring.holds[at] = Some(frame.clone());
         }
@@ -344,7 +368,12 @@ impl Worker {
                 self.readings.push((id, reading));
                 continue;
             }
-            let targets = self.renderer.targets(&view.viewport);
+            // Its film only while it shows the view's newest edit: a view
+            // that couldn't render it (its camera gone) has none.
+            let newest = view.filmed == Some(view.generation);
+            let targets = newest
+                .then(|| self.renderer.targets(&view.viewport))
+                .flatten();
             reading.answer(
                 &self.renderer,
                 targets,

@@ -18,11 +18,19 @@
 //! Only meshes rebuild the BVH. A material's new colors rewrite the object
 //! table; a new kind of material, or a new color attribute, makes the meshes
 //! again; lights and cameras never touch geometry.
+//!
+//! What it can't render as sent it says ([`Sync::problems`]): volumes past
+//! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
+//! make: it places nothing there), an illuminant Pixel's table lacks, a
+//! material node it doesn't declare.
 use crate::gpu::Changed;
+use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Material};
 use crate::render::{Ambient, Fog, Light, LightShape, Mesh, Rims, Scene, Surface, Volume};
-use kinogaki_render_api::geometry::{Attribute, Domain, UpAxis, Values, Vec3, Xform, names};
+use kinogaki_render_api::geometry::{
+    Attribute, Diagnostic, Domain, UpAxis, Values, Vec3, Xform, names,
+};
 use kinogaki_render_api::standard::{self, Shape as LightKind};
 use kinogaki_render_api::{
     Declared, Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
@@ -39,6 +47,16 @@ pub struct Sync {
     filled_by: Vec<Option<PrimId>>,
     settings: SceneSettings,
     scene: Scene,
+    /// What it can't render as sent, by what found it.
+    problems: Problems,
+}
+
+/// What each part of the scene can't render as sent.
+#[derive(Default)]
+struct Problems {
+    geometry: Vec<Diagnostic>,
+    materials: Vec<Diagnostic>,
+    lights: Vec<Diagnostic>,
 }
 
 /// Three rows of `x` in single precision.
@@ -106,6 +124,16 @@ impl Sync {
         &self.scene
     }
 
+    /// What it can't render as sent, each said once.
+    pub fn problems(&self) -> Vec<Diagnostic> {
+        let p = &self.problems;
+        [&p.geometry, &p.materials, &p.lights]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect()
+    }
+
     /// The world's up direction.
     pub fn up(&self) -> [f32; 3] {
         match self.settings.units.up() {
@@ -160,8 +188,14 @@ impl Sync {
     fn read_materials(&mut self) -> bool {
         let before = std::mem::take(&mut self.materials);
         let mut surfaces = Vec::new();
+        self.problems.materials.clear();
         for (id, prim) in &self.prims {
             if let Prim::Material(m) = prim {
+                if let Some(def) = nodes::foreign(&m.network) {
+                    self.problems.materials.push(Diagnostic::warning(format!(
+                        "{def} isn't a Pixel material: it renders the default surface"
+                    )));
+                }
                 let material = nodes::material(&m.network);
                 if let Material::Surface(s, _) = &material {
                     surfaces.push(*s);
@@ -209,35 +243,49 @@ impl Sync {
                     self.place(shape, &shape.xform().at(0.0), None, object, &mut built);
                 }
                 Prim::Instancer(inst) if inst.visibility().visible => {
-                    self.instances(inst, &inst.xform().at(0.0), object, &mut built, 0);
+                    let at = inst.xform().at(0.0);
+                    self.instances(inst, &at, object, &mut built, &mut vec![*id]);
                 }
                 _ => {}
             }
         }
         self.scene.meshes = built.meshes;
+        self.problems.geometry.clear();
+        if built.round {
+            self.problems.geometry.push(Diagnostic::warning(
+                "an Instancer places itself: its cycle places nothing",
+            ));
+        }
+        if built.volumes.len() > MAX_VOLUMES {
+            self.problems.geometry.push(Diagnostic::warning(format!(
+                "{} volumes: Pixel renders the first {MAX_VOLUMES}",
+                built.volumes.len()
+            )));
+        }
         (self.scene.volumes, self.filled_by) = built.volumes.into_iter().unzip();
     }
 
-    /// `instancer`'s instances under `above`.
+    /// `instancer`'s instances under `above`, it and the Instancers above it
+    /// on `path`: one met again places nothing there.
     fn instances(
         &self,
         instancer: &Instancer,
         above: &Xform,
         object: u32,
         built: &mut Built,
-        depth: u32,
+        path: &mut Vec<PrimId>,
     ) {
-        // A cycle can't be sent; a deep nest is cut short.
-        if depth > 16 {
-            return;
-        }
         for (i, xform) in instancer.xforms().iter().enumerate() {
             let at = above.compose(xform);
             let material = instancer.subsets().of(i).map(|m| m.prim());
-            match self.prims.get(&instancer.prototype_of(i)) {
+            let prototype = instancer.prototype_of(i);
+            match self.prims.get(&prototype) {
                 Some(Prim::Shape(shape)) => self.place(shape, &at, material, object, built),
+                Some(Prim::Instancer(_)) if path.contains(&prototype) => built.round = true,
                 Some(Prim::Instancer(nested)) => {
-                    self.instances(nested, &at, object, built, depth + 1)
+                    path.push(prototype);
+                    self.instances(nested, &at, object, built, path);
+                    path.pop();
                 }
                 _ => {}
             }
@@ -330,12 +378,18 @@ impl Sync {
     fn read_lights(&mut self) {
         let (mut lights, mut ambient, mut rims, mut fog) =
             (Vec::new(), Ambient::default(), Rims::default(), None);
+        self.problems.lights.clear();
         for prim in self.prims.values() {
             let Prim::Declared(prim) = prim else {
                 continue;
             };
             if !prim.visibility.visible {
                 continue;
+            }
+            if let Some(name) = lights::unknown_illuminant(prim) {
+                self.problems.lights.push(Diagnostic::warning(format!(
+                    "Pixel has no table for the illuminant {name}: it renders white"
+                )));
             }
             if &*prim.type_id == standard::FOG {
                 fog = fog.or_else(|| Some(fog_of(prim)));
@@ -428,6 +482,8 @@ impl Sync {
 struct Built {
     meshes: Vec<Mesh>,
     volumes: Vec<(Volume, Option<PrimId>)>,
+    /// An Instancer placed itself.
+    round: bool,
 }
 
 /// Adds `b` into `a`.

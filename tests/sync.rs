@@ -249,3 +249,38 @@ fn a_removed_shape_leaves_the_scene() {
     assert!(changed.geometry);
     assert!(sync.scene().meshes.is_empty());
 }
+
+/// An Instancer a later change makes place itself (through another) places
+/// nothing round the cycle, and says so; deep nesting short of one is
+/// placed whole.
+#[test]
+fn a_cycle_of_instancers_places_nothing_and_says_so() {
+    let mut sync = Sync::default();
+    let instancer = |prototype: PrimId| {
+        let places: Column<Xform> = vec![Xform::IDENTITY].into();
+        Instancer::builder(vec![prototype], places).build().unwrap()
+    };
+    // A chain 20 deep: deeper than any cap, placed whole.
+    let mut prims = vec![(id(0), Prim::Shape(square(None, [1.0; 3])))];
+    prims.extend((1..=20).map(|k| (id(k), Prim::Instancer(instancer(id(k - 1))))));
+    sync.apply(added(prims));
+    assert_eq!(
+        sync.scene().meshes.len(),
+        1,
+        "the shape, through 20 Instancers"
+    );
+    assert!(sync.problems().is_empty());
+    // Instancer 1 now places 3, which places 2, which places 1.
+    let change = Change::new(id(1), Dirty::ALL, Prim::Instancer(instancer(id(3))));
+    sync.apply(SceneUpdate {
+        changed: vec![change],
+        ..SceneUpdate::new()
+    });
+    assert_eq!(
+        sync.scene().meshes.len(),
+        1,
+        "the shape alone, named by none now"
+    );
+    let said = sync.problems();
+    assert!(said.iter().any(|d| d.message.contains("cycle")), "{said:?}");
+}

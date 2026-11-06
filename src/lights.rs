@@ -128,6 +128,17 @@ pub fn fog() -> DeclaredKind {
     DeclaredKind::atmosphere(FOG_KIND, standard::fog())
 }
 
+/// The illuminant `prim`'s emission names that Pixel's table lacks (it
+/// renders white).
+pub fn unknown_illuminant(prim: &Declared) -> Option<String> {
+    match Emission::of_key(prim.choice("emission")).unwrap_or_default() {
+        Emission::Illuminant(name) if spectrum::illuminant(&name).is_none() => {
+            Some(name.to_string())
+        }
+        _ => None,
+    }
+}
+
 /// The color `prim`'s emission makes, × intensity × 2^exposure (a light's
 /// radiance, a rim's light).
 pub fn emitted(prim: &Declared) -> [f32; 3] {

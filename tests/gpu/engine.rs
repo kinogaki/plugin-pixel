@@ -239,3 +239,60 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     let film = display.acquire_film(&frame, &[albedo]).expect("the film");
     assert!(film.image("albedo").is_some() && film.images()[0].aov.is_beauty());
 }
+
+/// A final read of a view whose camera went fails: never the film of the
+/// camera it had, stretched to the new size.
+#[test]
+#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+fn a_final_read_through_a_camera_gone_fails() {
+    let (mut engine, _display, waiter, _device) = pixel();
+    engine.update(scene());
+    engine.view(ViewId(1), view(64, 48, eye(), &[]));
+    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    let mut gone = view(32, 32, eye(), &[]);
+    gone.camera = kinogaki_render_api::ViewCamera::Prim(kinogaki_render_api::Id::of(PrimId {
+        slot: 99,
+        generation: 0,
+    }));
+    engine.view(ViewId(1), gone);
+    let beauty = AovDesc {
+        aov: engine.description().aov(aovs::BEAUTY).cloned().unwrap(),
+        format: AovFormat::F32,
+    };
+    let read = engine.finish(ViewId(1), &[beauty]);
+    let mut outcome = None;
+    waiter.until(|| {
+        outcome = read.take();
+        outcome.is_some()
+    });
+    assert!(outcome.unwrap().is_err(), "no film of its camera");
+}
+
+/// A view dropped takes the outputs it kept with it: a later view given its
+/// id keeps only what it asks for, from a later frame on.
+#[test]
+#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+fn a_dropped_views_kept_outputs_go_with_it() {
+    let (mut engine, mut display, waiter, _device) = pixel();
+    engine.update(scene());
+    engine.view(ViewId(1), view(64, 48, eye(), &[]));
+    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    let albedo = engine.description().aov("albedo").cloned().unwrap();
+    let first = engine.latest(ViewId(1)).unwrap();
+    drop(display.acquire_film(&first, std::slice::from_ref(&albedo)));
+    waiter.until(|| {
+        (engine.latest(ViewId(1)))
+            .and_then(|f| display.acquire_film(&f, std::slice::from_ref(&albedo)))
+            .is_some_and(|film| film.image("albedo").is_some())
+    });
+    engine.drop_view(ViewId(1));
+    display.drop_view(ViewId(1));
+    engine.view(ViewId(1), view(64, 48, eye(), &[]));
+    waiter.until(|| engine.latest(ViewId(1)).is_some());
+    let frame = engine.latest(ViewId(1)).unwrap();
+    let film = display.acquire_film(&frame, &[albedo]).expect("the film");
+    assert!(
+        film.image("albedo").is_none(),
+        "nothing kept of the old view"
+    );
+}

@@ -138,6 +138,7 @@ impl RenderEngine for PixelEngine {
         let mut shared = display::lock(&self.shared);
         shared.frames.remove(&view);
         shared.problems.remove(&view);
+        *shared.drops.entry(view).or_default() += 1;
         drop(shared);
         self.send(Message::Drop(view));
     }

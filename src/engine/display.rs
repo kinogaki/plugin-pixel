@@ -72,6 +72,17 @@ pub struct Shared {
     pub rings: BTreeMap<ViewId, Ring>,
     /// The outputs each view's images keep beside the beauty.
     pub kept: BTreeMap<ViewId, Vec<Output>>,
+    /// How often the host dropped each view: a frame of a view dropped
+    /// since it was given is never published, so a later view given the
+    /// same id never shows the dropped one's.
+    pub drops: BTreeMap<ViewId, u64>,
+}
+
+impl Shared {
+    /// How often view `view` was dropped so far.
+    pub fn drops(&self, view: ViewId) -> u64 {
+        self.drops.get(&view).copied().unwrap_or(0)
+    }
 }
 
 /// The shared state, locked (a poisoned lock is still the state).
@@ -162,5 +173,11 @@ impl Display for PixelDisplay {
         ];
         let pin = Pin::new(ring, at, self.freed.clone());
         Some(ShownFilm::new(frame.clone(), size, images, pin).pixelated())
+    }
+
+    /// The outputs the view was asked to keep go: a later view given its id
+    /// keeps only what it asks for.
+    fn drop_view(&mut self, view: ViewId) {
+        lock(&self.shared).kept.remove(&view);
     }
 }

@@ -19,6 +19,7 @@ mod passes;
 pub mod readback;
 mod records;
 mod scene;
+pub use scene::MAX_VOLUMES;
 mod targets;
 
 pub use records::Lighting;
