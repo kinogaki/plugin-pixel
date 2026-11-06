@@ -22,7 +22,7 @@ kinogaki-pixel/lib test lights::tests::distant_lights_and_spots_take_a_gobo_and_
 kinogaki-pixel/lib test lights::tests::emissions_are_colors_at_their_intensity
 kinogaki-pixel/lib test nodes::tests::a_surface_reads_its_constants_and_its_attribute
 kinogaki-pixel/lib test nodes::tests::a_volume_reads_its_medium_and_shows_as_one
-kinogaki-pixel/lib test nodes::tests::another_engines_material_becomes_a_surface_of_its_color
+kinogaki-pixel/lib test nodes::tests::the_standard_form_becomes_a_surface_of_its_base_color
 kinogaki-pixel/lib test outputs::tests::each_output_is_described_by_its_id
 kinogaki-pixel/lib test presets::tests::each_preset_makes_a_material_of_a_pixel_node
 kinogaki-pixel/lib test render::bvh::tests::coincident_triangles_still_split

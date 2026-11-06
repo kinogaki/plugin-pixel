@@ -259,7 +259,7 @@ impl Values<'_> {
 /// default surface).
 pub fn foreign(network: &MaterialNetwork) -> Option<NodeTypeId> {
     let node = network.output()?;
-    (node.def != SURFACE && node.def != VOLUME).then_some(node.def)
+    (node.def.id != SURFACE && node.def.id != VOLUME).then_some(node.def.id)
 }
 
 /// What `network` renders as: its shown node's material (a node it doesn't
@@ -269,7 +269,7 @@ pub fn material(network: &MaterialNetwork) -> Material {
         return Material::default();
     };
     let v = Values(&node.values);
-    if node.def == VOLUME {
+    if node.def.id == VOLUME {
         let offset = node
             .values
             .get("noise_offset")
@@ -295,7 +295,7 @@ pub fn material(network: &MaterialNetwork) -> Material {
                 .unwrap_or(false),
         });
     }
-    if node.def != SURFACE {
+    if node.def.id != SURFACE {
         return Material::default();
     }
     let attribute = (node.values.get("attribute").and_then(Value::text))
@@ -337,12 +337,11 @@ impl MaterialRules for Rules {
         }
     }
 
-    /// Another engine's material as a Pixel Surface of the color its shown
-    /// node holds, under the names color usually goes by.
-    fn translate(&self, foreign: &MaterialNetwork) -> Option<MaterialNetwork> {
-        let shown = foreign.output()?;
-        let names = ["color", "base_color", "diffuse_color", "diffuseColor"];
-        let color = names.iter().find_map(|n| shown.values.get(*n)?.color())?;
+    /// The standard form, an OpenPBR Surface, as a Pixel Surface of its base
+    /// color.
+    fn translate(&self, standard: &MaterialNetwork) -> Option<MaterialNetwork> {
+        let shown = &standard.nodes()[standard.surface()? as usize];
+        let color = shown.values.get("base_color")?.color()?;
         network_of([("color".to_owned(), Value::Color(color))].into())
     }
 }
@@ -414,11 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn another_engines_material_becomes_a_surface_of_its_color() {
-        let mut other = surface();
-        other.id = NodeTypeId::declared("acme.ray.plastic");
-        let theirs = of(other, &[("color", Value::Color([0.1, 0.2, 0.3]))]);
-        let mine = Rules.translate(&theirs).unwrap();
+    fn the_standard_form_becomes_a_surface_of_its_base_color() {
+        let color = [("base_color".to_owned(), Value::Color([0.1, 0.2, 0.3]))];
+        let standard = kinogaki_render_api::material::standard::open_pbr(&color.into()).unwrap();
+        let mine = Rules.translate(&standard).unwrap();
         let Material::Surface(s, _) = material(&mine) else {
             panic!("a surface");
         };

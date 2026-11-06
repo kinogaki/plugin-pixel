@@ -102,6 +102,7 @@ pub fn surface(color: [f64; 3]) -> Prim {
     Prim::Material(Material {
         network: Arc::new(built.build(at).expect("a network")),
         path: Arc::from("/Materials/Surface"),
+        double_sided: true,
     })
 }
 

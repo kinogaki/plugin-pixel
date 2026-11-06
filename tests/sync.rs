@@ -60,6 +60,7 @@ fn material(def: kinogaki_studio_api::NodeTypeId, values: &[(&str, Value)]) -> P
     Prim::Material(Material {
         network: Arc::new(built.build(at).unwrap()),
         path: Arc::from("/m"),
+        double_sided: true,
     })
 }
 
