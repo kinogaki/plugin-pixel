@@ -50,7 +50,7 @@ git clone https://github.com/kinogaki/studio-sdk sdk
 git clone https://github.com/kinogaki/plugin-pixel plugins/pixel
 cd plugins/pixel
 cargo test                           # the scene sync
-cargo test --test gpu -- --ignored   # the GPU tests (a native graphics adapter)
+cargo test --test gpu -- --ignored --skip hand_run_   # the GPU tests (a native graphics adapter)
 ```
 
 `plugin/` is the library Studio loads. It links Studio's shared library (`kinogaki_shared`), so it is built in Studio's tree, or against a Studio release's plugin kit as the SDK's guides describe; Studio's tree also runs Pixel's example render through the editor (`workflows/`); Pixel's own GPU tests run the SDK's engine conformance.
