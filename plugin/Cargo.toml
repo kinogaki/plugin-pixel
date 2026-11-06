@@ -13,6 +13,10 @@ crate-type = ["dylib"]
 [lints]
 workspace = true
 
+# The library Studio loads. It links Studio's shared library, the plugin
+# kit's `kinogaki_shared`, so it builds in Studio's tree (whose workspace it
+# inherits) or against a release's kit; the engine itself builds beside the
+# public SDK alone.
 [dependencies]
 # The shared crates' one build: the package and the engine cross as its types.
 kinogaki-shared.workspace = true

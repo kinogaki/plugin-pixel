@@ -2,7 +2,7 @@
 
 Pixel is a realtime pixel-art render engine for [Kinogaki Studio](https://github.com/kinogaki), Studio's second render engine. It renders on the host's own wgpu device at a coarse film resolution, lights the film with ray-traced ambient occlusion, hard shadows, one bounce of diffuse light and volumes, quantizes and dithers the light through a Shade Ramp, and repeats each film pixel over its block of the view. Inputs and outputs are linear ACEScg.
 
-It is a plugin on Studio's public SDK (`kinogaki-studio-api`, `kinogaki-render-api` with its `wgpu` feature) and builds inside the Studio tree: the library crate `kinogaki-pixel` holds the engine, and `plugin/` (`kinogaki-plugin-pixel`) is the dylib Studio loads, `renders/pixel.dylib`.
+It is a plugin on Studio's public SDK (`kinogaki-studio-api`, `kinogaki-render-api` with its `wgpu` feature): the library crate `kinogaki-pixel` holds the engine, and `plugin/` (`kinogaki-plugin-pixel`) is the dylib Studio loads, `renders/pixel.dylib`.
 
 ## A frame
 
@@ -41,16 +41,19 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 | `sync` | The host's prims as the scene: shapes and instances flattened by material, volumes, lights |
 | `engine` | The render thread, the display images, final reads and previews |
 
-## Checks
+## Building
 
-From the Studio tree's root:
+The engine builds from this repository and the public [studio-sdk](https://github.com/kinogaki/studio-sdk) alone, checked out side by side as Studio's tree lays them out (`sdk/` and `plugins/pixel/`), with the compiler the SDK pins (`sdk/rust-toolchain.toml`):
 
 ```sh
-python3 tools/check_all.py --changed
-cargo test -p kinogaki-pixel --test gpu -- --ignored   # the GPU tests
+git clone https://github.com/kinogaki/studio-sdk sdk
+git clone https://github.com/kinogaki/plugin-pixel plugins/pixel
+cd plugins/pixel
+cargo test                           # the scene sync
+cargo test --test gpu -- --ignored   # the GPU tests (a native graphics adapter)
 ```
 
-`PIXEL_REFERENCES=1` writes the example's reference image (`tests/references/example.png`) instead of comparing with it.
+`plugin/` is the library Studio loads. It links Studio's shared library (`kinogaki_shared`), so it is built in Studio's tree, or against a Studio release's plugin kit as the SDK's guides describe; Studio's tree also runs Pixel's example render and the SDK's conformance suite through the editor (`workflows/`).
 
 ## License
 

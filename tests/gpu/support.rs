@@ -1,6 +1,6 @@
-//! What Pixel's GPU tests share: the device (taking the test's turn on the
-//! GPU), the engine made on it with its wakes counted, and a small scene as
-//! a host sends it: a grey floor, a red box on it, a sun and a sky.
+//! What Pixel's GPU tests share: the engine on the SDK's test device with
+//! its wakes counted, and a small scene as a host sends it: a grey floor, a
+//! red box on it, a sun and a sky.
 use kinogaki_pixel::engine::Pixel;
 use kinogaki_pixel::nodes::SURFACE;
 use kinogaki_render_api::display::{Display, Engine, Options, wgpu};
@@ -18,12 +18,6 @@ use std::time::Duration;
 /// How long a test waits for Pixel.
 pub const LIMIT: Duration = Duration::from_secs(60);
 
-/// This machine's GPU, its turn taken for the test's thread.
-pub fn device() -> (wgpu::Device, wgpu::Queue) {
-    kinogaki_gpu_turns::share();
-    engine::device()
-}
-
 /// Pixel on this machine's GPU, its frames carrying their pixels.
 pub fn pixel() -> (
     Box<dyn RenderEngine>,
@@ -31,7 +25,7 @@ pub fn pixel() -> (
     Waiter,
     wgpu::Device,
 ) {
-    let (device, queue) = device();
+    let (device, queue) = engine::device();
     let waiter = Waiter::default();
     let options = Options {
         read_pixels: true,

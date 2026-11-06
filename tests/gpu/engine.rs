@@ -18,7 +18,7 @@ fn eye() -> Vec3 {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_change_renders_one_frame_and_rest_renders_none() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
@@ -44,7 +44,7 @@ fn a_change_renders_one_frame_and_rest_renders_none() {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn the_light_falls_on_the_shade_levels() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
@@ -90,7 +90,7 @@ fn the_light_falls_on_the_shade_levels() {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_new_color_renders_again_and_views_share_the_scene() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
@@ -135,7 +135,7 @@ fn a_new_color_renders_again_and_views_share_the_scene() {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
@@ -183,7 +183,7 @@ fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_preview_is_a_swatch_of_the_material() {
     let (mut engine, _display, waiter, _device) = pixel();
     let Some(kinogaki_render_api::Prim::Material(red)) = Some(surface([0.8, 0.1, 0.1])) else {
@@ -210,7 +210,7 @@ fn a_preview_is_a_swatch_of_the_material() {
 }
 
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
     let (mut engine, mut display, waiter, _device) = pixel();
     engine.update(scene());
@@ -245,7 +245,7 @@ fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {
 /// A final read of a view whose camera went fails: never the film of the
 /// camera it had, stretched to the new size.
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_final_read_through_a_camera_gone_fails() {
     let (mut engine, _display, waiter, _device) = pixel();
     engine.update(scene());
@@ -273,7 +273,7 @@ fn a_final_read_through_a_camera_gone_fails() {
 /// A view dropped takes the outputs it kept with it: a later view given its
 /// id keeps only what it asks for, from a later frame on.
 #[test]
-#[ignore = "requires a native graphics adapter; run with tools/check_all.py --gpu"]
+#[ignore = "requires a native graphics adapter"]
 fn a_dropped_views_kept_outputs_go_with_it() {
     let (mut engine, mut display, waiter, _device) = pixel();
     engine.update(scene());

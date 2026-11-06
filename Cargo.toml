@@ -1,29 +1,29 @@
 [package]
 name = "kinogaki-pixel"
 description = "Pixel, the realtime pixel-art render engine, as a render engine on the Kinogaki Studio SDK: its renderer (film, camera, BVH, dither, the passes on a wgpu host's own device), its description, material nodes, lights, fog, scene sync and render thread"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-publish.workspace = true
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
 license = "MIT OR Apache-2.0"
 
-[lints]
-workspace = true
+# Pixel builds from its own repository and the public SDK's alone, checked
+# out side by side as Studio's tree lays them out (README "Building"): its
+# manifest names everything it needs instead of inheriting it from the tree.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
 
 [dependencies]
-kinogaki-studio-api = { workspace = true, features = ["wgpu"] }
-kinogaki-render-api = { workspace = true, features = ["wgpu"] }
-# The records the GPU reads, laid out as the shaders read them.
-bytemuck.workspace = true
+kinogaki-studio-api = { path = "../../sdk/crates/api", features = ["wgpu"] }
+kinogaki-render-api = { path = "../../sdk/crates/render-api", features = ["wgpu"] }
+# The records the GPU reads, laid out as the shaders read them (the
+# version the SDK pins).
+bytemuck = { version = "=1.25.2", features = ["derive"] }
 
 [dev-dependencies]
-# The editor offscreen, and the conformance suite's engine consumer.
-kinogaki-harness.workspace = true
-kinogaki-studio-api-testing = { workspace = true, features = ["wgpu"] }
-# What the example is modelled in.
-kinogaki-mesh.workspace = true
-kinogaki-mesh-kernel.workspace = true
-# Reference images.
-kinogaki-png.workspace = true
-# The GPU tests' turns on the one GPU.
-kinogaki-gpu-turns.workspace = true
+# The SDK's engine test support: the device and its turns, counted wakes.
+kinogaki-studio-api-testing = { path = "../../sdk/crates/api-testing", features = ["wgpu"] }
