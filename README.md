@@ -33,7 +33,7 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 
 | Module | Role |
 |---|---|
-| `render` | The renderer, knowing no SDK: the scene in world space, `film`, `camera`, `bvh` (binned SAH, built on the CPU when geometry changes), `dither`, `settings`, `spectrum` (blackbodies and CIE illuminants as ACEScg) |
+| `render` | The renderer, knowing no SDK: the scene in world space, `film`, `camera`, `bvh` (binned SAH, built on the CPU when geometry changes), `dither`, `settings` |
 | `gpu` | The passes on the host's device, their records and shaders (`gpu/shaders`) |
 | `description`, `settings`, `outputs` | What a host reads: capabilities, settings, outputs |
 | `nodes`, `presets` | Pixel Surface and Pixel Volume, their display approximation and translation; the starting materials |

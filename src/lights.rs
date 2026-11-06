@@ -11,9 +11,9 @@
 //!   height fog, flat, or lit by the lights and marched with the volumes
 //!   when In-scatter is on.
 //!
-//! Emissions become colors here, at luminance 1 ([`spectrum`]): Pixel
-//! renders in RGB.
-use crate::render::{Gobo, spectrum};
+//! Emissions become colors here, at luminance 1 (the SDK's
+//! [`Emission::color`]): Pixel renders in RGB.
+use crate::render::Gobo;
 use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, NumberLook, Value, ValueKind};
 use kinogaki_render_api::{Declared, PrimType, Role, SettingDescriptor, SettingGroup};
@@ -128,27 +128,13 @@ pub fn fog() -> DeclaredKind {
     DeclaredKind::atmosphere(FOG_KIND, standard::fog())
 }
 
-/// The illuminant `prim`'s emission names that Pixel's table lacks (it
-/// renders white).
-pub fn unknown_illuminant(prim: &Declared) -> Option<String> {
-    match Emission::of_key(prim.choice("emission")).unwrap_or_default() {
-        Emission::Illuminant(name) if spectrum::illuminant(&name).is_none() => {
-            Some(name.to_string())
-        }
-        _ => None,
-    }
-}
-
-/// The color `prim`'s emission makes, × intensity × 2^exposure (a light's
-/// radiance, a rim's light).
+/// The color a rim's emission makes, × intensity × 2^exposure (a standard
+/// light's is [`standard::Light::radiance`]).
 pub fn emitted(prim: &Declared) -> [f32; 3] {
-    let rgb = match Emission::of_key(prim.choice("emission")).unwrap_or_default() {
-        Emission::Color => prim.color("color").map(f64::from),
-        Emission::Temperature => {
-            spectrum::blackbody(f64::from(prim.float("colorTemperature").max(1.0)))
-        }
-        Emission::Illuminant(name) => spectrum::illuminant(&name).unwrap_or([1.0; 3]),
-    };
+    let emission = Emission::of_key(prim.choice("emission")).unwrap_or_default();
+    let color = prim.color("color").map(f64::from);
+    let kelvin = f64::from(prim.float("colorTemperature"));
+    let rgb = emission.color(color, kelvin).unwrap_or([1.0; 3]);
     let k = f64::from(prim.float("intensity")) * f64::from(prim.float("exposure")).exp2();
     rgb.map(|c| (c * k) as f32)
 }

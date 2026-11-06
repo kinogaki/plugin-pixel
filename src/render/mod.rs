@@ -1,7 +1,6 @@
 //! Pixel's renderer, knowing no SDK: the scene it renders ([`Scene`], world
 //! space throughout), the film and camera ([`film`], [`camera`]), the BVH
-//! its rays trace ([`bvh`]), the dither ([`dither`]) and the colors
-//! emitters' spectra show as ([`spectrum`]). The passes that render it on a
+//! its rays trace ([`bvh`]) and the dither ([`dither`]). The passes that render it on a
 //! wgpu device are the crate's `gpu` module; `sync` makes a [`Scene`] of
 //! the host's prims.
 pub mod bvh;
@@ -9,7 +8,6 @@ pub mod camera;
 pub mod dither;
 pub mod film;
 pub mod settings;
-pub mod spectrum;
 pub mod vector;
 
 /// Everything a frame renders, in world space and linear ACEScg.

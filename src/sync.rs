@@ -56,7 +56,6 @@ pub struct Sync {
 struct Problems {
     geometry: Vec<Diagnostic>,
     materials: Vec<Diagnostic>,
-    lights: Vec<Diagnostic>,
 }
 
 /// Three rows of `x` in single precision.
@@ -127,7 +126,7 @@ impl Sync {
     /// What it can't render as sent, each said once.
     pub fn problems(&self) -> Vec<Diagnostic> {
         let p = &self.problems;
-        [&p.geometry, &p.materials, &p.lights]
+        [&p.geometry, &p.materials]
             .into_iter()
             .flatten()
             .cloned()
@@ -378,18 +377,12 @@ impl Sync {
     fn read_lights(&mut self) {
         let (mut lights, mut ambient, mut rims, mut fog) =
             (Vec::new(), Ambient::default(), Rims::default(), None);
-        self.problems.lights.clear();
         for prim in self.prims.values() {
             let Prim::Declared(prim) = prim else {
                 continue;
             };
             if !prim.visibility.visible {
                 continue;
-            }
-            if let Some(name) = lights::unknown_illuminant(prim) {
-                self.problems.lights.push(Diagnostic::warning(format!(
-                    "Pixel has no table for the illuminant {name}: it renders white"
-                )));
             }
             if &*prim.type_id == standard::FOG {
                 fog = fog.or_else(|| Some(fog_of(prim)));
@@ -407,7 +400,7 @@ impl Sync {
             let Some(light) = standard::Light::decode(prim) else {
                 continue;
             };
-            let radiance = lights::emitted(prim);
+            let radiance = light.radiance();
             let shape = match light.shape {
                 LightKind::Dome { ground, .. } => {
                     add(&mut ambient.sky, radiance);
