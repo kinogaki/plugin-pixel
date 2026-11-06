@@ -15,7 +15,7 @@
 //! [`Emission::color`]): Pixel renders in RGB.
 use crate::render::Gobo;
 use kinogaki_render_api::standard::{self, Emission};
-use kinogaki_render_api::value::{Choice, Condition, Number, NumberLook, Value, ValueKind};
+use kinogaki_render_api::value::{Choice, Condition, Number, Value, ValueKind};
 use kinogaki_render_api::{Declared, PrimType, PrimTypeId, Role, SettingDescriptor, SettingGroup};
 use kinogaki_studio_api::ObjectKindId;
 use kinogaki_studio_api::render::DeclaredKind;
@@ -34,39 +34,27 @@ const GOBO: &str = "gobo";
 fn gobo_params() -> Vec<SettingDescriptor> {
     let on = || Condition::when("gobo", true);
     let shown = |d: SettingDescriptor| d.requires(on(), "Used with Gobo on");
-    let slider = |min, max, soft: (f64, f64)| {
-        ValueKind::Number(Number::plain().range(min, max).soft(soft.0, soft.1))
-    };
-    let look = |decimals| NumberLook::slider().decimals(decimals).speed(0.01);
     vec![
-        SettingDescriptor::new("gobo", "Gobo", GOBO, ValueKind::Toggle, false)
+        SettingDescriptor::toggle(("gobo", "Gobo", GOBO), false)
             .tooltip("Masks the light with dappled shade, as if through leaves"),
-        shown(
-            SettingDescriptor::new(
-                "goboScale",
-                "Scale",
-                GOBO,
-                ValueKind::Number(Number::length().range(1e-3, 1e6).soft(0.1, 10.0)),
-                1.0,
-            )
-            .look(NumberLook::default().decimals(2).speed(0.01)),
-        ),
-        shown(
-            SettingDescriptor::new(
-                "goboContrast",
-                "Contrast",
-                GOBO,
-                slider(0.0, 1.0, (0.0, 1.0)),
-                0.5,
-            )
-            .look(look(2)),
-        ),
-        shown(SettingDescriptor::new(
-            "goboSeed",
-            "Seed",
-            GOBO,
-            ValueKind::integer(0, 1 << 20),
-            0i64,
+        shown(SettingDescriptor::length(
+            ("goboScale", "Scale", GOBO),
+            (1e-3, 1e6),
+            Some((0.1, 10.0)),
+            2,
+            1.0,
+        )),
+        shown(SettingDescriptor::slider(
+            ("goboContrast", "Contrast", GOBO),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            2,
+            0.5,
+        )),
+        shown(SettingDescriptor::integer(
+            ("goboSeed", "Seed", GOBO),
+            (0, 1 << 20),
+            0,
         )),
         shown(SettingDescriptor::new(
             "goboOffset",

@@ -6,7 +6,7 @@ use crate::render::dither::Dither;
 use crate::render::settings::{MAX_GI_SAMPLES, MAX_LEVELS, MAX_VOLUME_STEPS, Settings};
 use kinogaki_render_api::settings::fit;
 use kinogaki_render_api::value::ramp::{Interpolation, Key};
-use kinogaki_render_api::value::{Choice, Number, NumberLook, Parameters, Ramp, Value, ValueKind};
+use kinogaki_render_api::value::{Choice, Parameters, ParametersExt, Ramp, Value, ValueKind};
 use kinogaki_render_api::{SettingDescriptor, SettingGroup, standard};
 
 const PIXELS: &str = "pixels";
@@ -47,43 +47,6 @@ fn default_ramp() -> Ramp {
     }
 }
 
-/// An integer row over `min..=max`.
-fn integer(
-    name: &str,
-    label: &str,
-    group: &str,
-    (min, max): (i64, i64),
-    default: i64,
-) -> SettingDescriptor {
-    SettingDescriptor::new(name, label, group, ValueKind::integer(min, max), default)
-}
-
-/// A slider row over `min..=max`, dragged over `soft`.
-fn slider(
-    name: &str,
-    label: &str,
-    group: &str,
-    (min, max, soft): (f64, f64, (f64, f64)),
-    default: f64,
-) -> SettingDescriptor {
-    let kind = ValueKind::Number(Number::plain().range(min, max).soft(soft.0, soft.1));
-    SettingDescriptor::new(name, label, group, kind, default)
-        .look(NumberLook::slider().decimals(3).speed(0.01))
-}
-
-/// A length row in scene units, dragged over `soft`.
-fn length(
-    name: &str,
-    label: &str,
-    group: &str,
-    soft: (f64, f64),
-    default: f64,
-) -> SettingDescriptor {
-    let kind = ValueKind::Number(Number::length().range(0.0, 1e6).soft(soft.0, soft.1));
-    SettingDescriptor::new(name, label, group, kind, default)
-        .look(NumberLook::default().decimals(2).speed(0.01))
-}
-
 /// The settings, in the order a Render Output lists them.
 pub fn descriptors() -> Vec<SettingDescriptor> {
     let levels = (2, i64::from(MAX_LEVELS));
@@ -91,9 +54,9 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
         .map(|(_, key, label)| Choice::new(key, label))
         .to_vec();
     vec![
-        integer("pixel_size", "Pixel Size", PIXELS, (1, 64), 4)
+        SettingDescriptor::integer(("pixel_size", "Pixel Size", PIXELS), (1, 64), 4)
             .tooltip("View pixels a film pixel covers"),
-        integer("shade_levels", "Shade Levels", PIXELS, levels, 4),
+        SettingDescriptor::integer(("shade_levels", "Shade Levels", PIXELS), levels, 4),
         SettingDescriptor::new(
             "dither",
             "Dither",
@@ -101,11 +64,11 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             ValueKind::choice(dithers),
             standard::choice("bayer4"),
         ),
-        slider(
-            "dither_strength",
-            "Dither Strength",
-            PIXELS,
-            (0.0, 1.0, (0.0, 1.0)),
+        SettingDescriptor::slider(
+            ("dither_strength", "Dither Strength", PIXELS),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            3,
             1.0,
         ),
         SettingDescriptor::new(
@@ -119,59 +82,67 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
             Value::Ramp(default_ramp()),
         )
         .tooltip("The color of each shade level, darkest to brightest"),
-        length("ao_distance", "AO Distance", OCCLUSION, (0.0, 10.0), 1.0)
-            .tooltip("How far ambient occlusion looks"),
-        slider(
-            "ao_strength",
-            "AO Strength",
-            OCCLUSION,
-            (0.0, 1.0, (0.0, 1.0)),
+        SettingDescriptor::length(
+            ("ao_distance", "AO Distance", OCCLUSION),
+            (0.0, 1e6),
+            Some((0.0, 10.0)),
+            2,
+            1.0,
+        )
+        .tooltip("How far ambient occlusion looks"),
+        SettingDescriptor::slider(
+            ("ao_strength", "AO Strength", OCCLUSION),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            3,
             1.0,
         )
         .tooltip("How dark occluded places go: 0 ignores AO, 1 applies all of it"),
-        slider(
-            "ao_power",
-            "AO Power",
-            OCCLUSION,
-            (0.1, 8.0, (0.25, 4.0)),
+        SettingDescriptor::slider(
+            ("ao_power", "AO Power", OCCLUSION),
+            (0.1, 8.0),
+            (0.25, 4.0),
+            3,
             1.0,
         )
         .tooltip("AO's contrast: above 1 darkens partly open places more"),
-        slider(
-            "ao_direct",
-            "AO on Direct",
-            OCCLUSION,
-            (0.0, 1.0, (0.0, 1.0)),
+        SettingDescriptor::slider(
+            ("ao_direct", "AO on Direct", OCCLUSION),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            3,
             0.0,
         )
         .tooltip("How much AO also darkens direct light, for contact shadows in dense foliage"),
-        slider("gi", "GI", BOUNCE, (0.0, 1000.0, (0.0, 4.0)), 1.0)
+        SettingDescriptor::slider(("gi", "GI", BOUNCE), (0.0, 1000.0), (0.0, 4.0), 3, 1.0)
             .tooltip("Scales one bounce of light off nearby surfaces; 0 turns it off"),
-        integer(
-            "gi_samples",
-            "GI Samples",
-            BOUNCE,
+        SettingDescriptor::integer(
+            ("gi_samples", "GI Samples", BOUNCE),
             (1, i64::from(MAX_GI_SAMPLES)),
             16,
         )
         .tooltip("Bounce rays a pixel traces, in a fixed pattern")
         .animatable(false),
-        length("gi_distance", "GI Distance", BOUNCE, (0.0, 20.0), 4.0)
-            .tooltip("How far bounce rays look"),
-        integer(
-            "volume_steps",
-            "Volume Steps",
-            VOLUMES,
+        SettingDescriptor::length(
+            ("gi_distance", "GI Distance", BOUNCE),
+            (0.0, 1e6),
+            Some((0.0, 20.0)),
+            2,
+            4.0,
+        )
+        .tooltip("How far bounce rays look"),
+        SettingDescriptor::integer(
+            ("volume_steps", "Volume Steps", VOLUMES),
             (1, i64::from(MAX_VOLUME_STEPS)),
             24,
         )
         .tooltip("Steps a ray takes through volumes, and as many through lit fog")
         .animatable(false),
-        length(
-            "volume_max_distance",
-            "Volume Max Distance",
-            VOLUMES,
-            (0.0, 500.0),
+        SettingDescriptor::length(
+            ("volume_max_distance", "Volume Max Distance", VOLUMES),
+            (0.0, 1e6),
+            Some((0.0, 500.0)),
+            2,
             100.0,
         )
         .tooltip("How far from the camera volumes and lit fog are marched"),
@@ -184,13 +155,13 @@ pub fn descriptors() -> Vec<SettingDescriptor> {
         )
         .tooltip("Each step traces shadow rays: light shafts and a darker inside under cover")
         .animatable(false),
-        integer("volume_levels", "Volume Levels", VOLUMES, levels, 12)
+        SettingDescriptor::integer(("volume_levels", "Volume Levels", VOLUMES), levels, 12)
             .tooltip("Levels of the opacity and light of volumes and fog"),
-        slider(
-            "volume_dither",
-            "Volume Dither",
-            VOLUMES,
-            (0.0, 1.0, (0.0, 1.0)),
+        SettingDescriptor::slider(
+            ("volume_dither", "Volume Dither", VOLUMES),
+            (0.0, 1.0),
+            (0.0, 1.0),
+            3,
             0.25,
         )
         .tooltip("Dither on volumes and fog: below 1 only the bands' edges dither"),
@@ -209,10 +180,11 @@ fn table(ramp: &Ramp, levels: i64) -> Vec<[f32; 3]> {
 /// default), with `up`, the world's up direction (unit).
 pub fn read(values: &Parameters, up: [f32; 3]) -> Settings {
     let values = fit(&descriptors(), values);
-    let number = |name: &str| values.get(name).and_then(Value::number).unwrap_or(0.0) as f32;
-    let integer = |name: &str| values.get(name).and_then(Value::integer).unwrap_or(0);
+    // Fitted: every value is there, of its kind.
+    let number = |name: &str| values.number(name).unwrap_or(0.0) as f32;
+    let integer = |name: &str| values.integer(name).unwrap_or(0);
     let count = |name: &str| integer(name).max(1) as u32;
-    let key = values.get("dither").and_then(Value::choice).unwrap_or("");
+    let key = values.choice("dither").unwrap_or("");
     let ramp = (values.get("shade_ramp").and_then(Value::ramp))
         .cloned()
         .unwrap_or_else(default_ramp);
