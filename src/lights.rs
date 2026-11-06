@@ -18,7 +18,7 @@ use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, Value, ValueKind};
 use kinogaki_render_api::{Declared, Parameter, PrimType, PrimTypeId, Role, Section};
 use kinogaki_studio_api::ObjectKindId;
-use kinogaki_studio_api::render::DeclaredKind;
+use kinogaki_studio_api::render::lights::DeclaredKind;
 
 /// The Light kind's id.
 pub const LIGHT_KIND: ObjectKindId = ObjectKindId::declared("kinogaki.pixel.light");
