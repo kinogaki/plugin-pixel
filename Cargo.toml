@@ -17,8 +17,9 @@ kinogaki-render-api = { workspace = true, features = ["wgpu"] }
 bytemuck.workspace = true
 
 [dev-dependencies]
-# The editor offscreen.
+# The editor offscreen, and the conformance suite's engine consumer.
 kinogaki-harness.workspace = true
+kinogaki-studio-api-testing.workspace = true
 # What the example is modelled in.
 kinogaki-mesh.workspace = true
 kinogaki-mesh-kernel.workspace = true

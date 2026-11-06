@@ -59,8 +59,8 @@ struct Object {
     id: vec4<u32>,
 }
 
-// The id of a film pixel no mesh covers (a mesh's is at least 1).
-const MISS: u32 = 0u;
+// The id of a film pixel no mesh covers (the standard objectId's miss).
+const MISS: u32 = 0xffffffffu;
 const PI: f32 = 3.14159265358979;
 
 @group(0) @binding(0) var<uniform> frame: Frame;

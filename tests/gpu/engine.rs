@@ -164,10 +164,8 @@ fn final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go() {
     let ids = &outputs.planes[3].1;
     let box_id = ids[(26 * 64 + 32) as usize].to_bits();
     let sky_id = ids[0].to_bits();
-    assert!(
-        box_id > 0 && sky_id == 0,
-        "the box {box_id}, the sky {sky_id}"
-    );
+    assert!(box_id > 0 && box_id < u32::MAX, "the box {box_id}");
+    assert_eq!(sky_id, u32::MAX, "the sky: a miss");
     // A read no one holds any more is let go.
     drop(engine.finish(ViewId(1), &asked));
     let gone = engine.finish(ViewId(9), &asked);

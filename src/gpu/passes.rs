@@ -292,8 +292,8 @@ impl Passes {
         self.upscale.dispatch(encoder, t.film.view, &[upscale]);
     }
 
-    /// The G-buffer: every target cleared (ids to 0, `MISS`: nothing; depth
-    /// to the far plane, 0: depth is reversed), then the triangles drawn.
+    /// The G-buffer: every target cleared (ids to `MISS`, depth to the far
+    /// plane, 0: depth is reversed), then the triangles drawn.
     fn draw_gbuffer(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -312,13 +312,17 @@ impl Passes {
                 },
             })
         };
+        let miss = wgpu::Color {
+            r: f64::from(u32::MAX),
+            ..wgpu::Color::TRANSPARENT
+        };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("pixel gbuffer"),
             color_attachments: &[
                 clear(t.view(Output::Albedo), wgpu::Color::TRANSPARENT),
                 clear(t.view(Output::Normal), wgpu::Color::TRANSPARENT),
                 clear(t.view(Output::Depth), wgpu::Color::TRANSPARENT),
-                clear(t.view(Output::ObjectId), wgpu::Color::TRANSPARENT),
+                clear(t.view(Output::ObjectId), miss),
                 clear(&t.transmit.view, wgpu::Color::TRANSPARENT),
             ],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
