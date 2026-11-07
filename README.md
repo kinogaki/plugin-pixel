@@ -20,7 +20,7 @@ Every pass is deterministic: a frame of the same scene and view is the same imag
 
 ## Materials, lights and fog
 
-- **Pixel Surface**: Color, Color Attribute (`Cd`), Translucency, Translucency Color. **Pixel Volume**: Density, Scatter Color, Anisotropy, Edge Falloff, Shadows, Emission and Noise. Pixel has no node graph: each node is a material on its own. The shaded viewport shows a surface's color (× its attribute) and a volume as a ghost of its bounds; another engine's material renders as a Pixel Surface of its color.
+- **Pixel Surface**: Color, Color Attribute (`Cd`), Translucency, Translucency Color. **Pixel Volume**: Density, Scatter Color, Anisotropy, Edge Falloff, Shadows, Emission and Noise. Pixel has no node graph: each node is a material on its own. The shaded viewport shows a surface's color (× its attribute) and a volume as a ghost of its bounds; another engine's material renders as a Pixel Surface of its color, and another engine renders a Pixel Surface as its standard form, an OpenPBR Surface of its color (a Pixel Volume has none).
 - **Lights** (`kinogaki.pixel.light`): UsdLux's area, dome, distant and spot lights (distant lights and spots with a Gobo section), and the **Rim Light**, a Fresnel-like edge, `(1 − n·v)⁴` × its emission, where direct light reaches (Lit) or all round (All).
 - **Fog** (`kinogaki.pixel.fog`): exponential height fog, flat, or lit and marched with the volumes when In-scatter is on.
 - Starting materials: Grass, Stone, Clay, Fog Volume, Mist.

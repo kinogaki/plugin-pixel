@@ -20,6 +20,7 @@ kinogaki-pixel/lib test gpu::scene::tests::media_carry_their_volumes_index
 kinogaki-pixel/lib test gpu::scene::tests::meshes_lie_side_by_side_and_instances_draw_by_mesh
 kinogaki-pixel/lib test lights::tests::distant_lights_and_spots_take_a_gobo_and_the_rim_comes_last
 kinogaki-pixel/lib test lights::tests::emissions_are_colors_at_their_intensity
+kinogaki-pixel/lib test nodes::tests::a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none
 kinogaki-pixel/lib test nodes::tests::a_surface_reads_its_constants_and_its_attribute
 kinogaki-pixel/lib test nodes::tests::a_volume_reads_its_medium_and_shows_as_one
 kinogaki-pixel/lib test nodes::tests::the_standard_form_becomes_a_surface_of_its_base_color

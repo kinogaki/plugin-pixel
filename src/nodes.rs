@@ -15,6 +15,7 @@
 //! constants, the network's shown node. [`Rules`] approximates them for the
 //! shaded viewport and makes a Pixel Surface of another engine's material.
 use crate::render::{Medium, Surface};
+use kinogaki_render_api::material::standard::open_pbr;
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
     Input, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, Parameter, Section,
@@ -337,6 +338,16 @@ impl MaterialRules for Rules {
         }
     }
 
+    /// A Pixel Surface as an OpenPBR Surface of its color; a Pixel Volume
+    /// has none.
+    fn standard(&self, own: &MaterialNetwork) -> Option<MaterialNetwork> {
+        let Material::Surface(surface, _) = material(own) else {
+            return None;
+        };
+        let color = Value::Color(surface.color.map(f64::from));
+        open_pbr(&[("base_color".to_owned(), color)].into()).ok()
+    }
+
     /// The standard form, an OpenPBR Surface, as a Pixel Surface of its base
     /// color.
     fn translate(&self, standard: &MaterialNetwork) -> Option<MaterialNetwork> {
@@ -410,6 +421,17 @@ mod tests {
         );
         let shown = Rules.display(&mist);
         assert!(shown.volume && shown.color == [0.8; 3]);
+    }
+
+    #[test]
+    fn a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none() {
+        let color = Value::Color([0.25, 0.5, 0.125]);
+        let mine = of(surface(), &[("color", color.clone())]);
+        let standard = Rules.standard(&mine).unwrap();
+        let shown = &standard.nodes()[standard.surface().unwrap() as usize];
+        assert_eq!(shown.def.mtlx().unwrap().node, "open_pbr_surface");
+        assert_eq!(shown.values["base_color"], color);
+        assert!(Rules.standard(&of(volume(), &[])).is_none());
     }
 
     #[test]
