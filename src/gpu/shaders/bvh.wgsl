@@ -52,6 +52,9 @@ fn into(i: Instance, r: Ray) -> Ray {
 }
 
 // Where `r` enters node `n`'s box within (0, t_max), or -1 when it misses.
+// An empty box (min above max: the top level of a scene with no instances)
+// is entered by no ray: the slab test alone would enter it everywhere, and
+// walk the zeroed fallback instance's mesh without end.
 fn box_entry(n: Node, r: Ray, t_max: f32) -> f32 {
     let t0 = (n.min - r.o) * r.inv;
     let t1 = (n.max - r.o) * r.inv;
@@ -59,7 +62,7 @@ fn box_entry(n: Node, r: Ray, t_max: f32) -> f32 {
     let hi = max(t0, t1);
     let near = max(max(max(lo.x, lo.y), lo.z), 0.0);
     let far = min(min(min(hi.x, hi.y), hi.z), t_max);
-    return select(-1.0, near, near <= far);
+    return select(-1.0, near, near <= far && all(n.min <= n.max));
 }
 
 // Möller–Trumbore: the distance along the ray to the triangle, or -1 when

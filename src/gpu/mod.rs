@@ -16,6 +16,7 @@
 //! A [`Viewport`] is one view's uniform, film textures and bind groups.
 use kinogaki_render_api::display::wgpu;
 mod atlas;
+mod budget;
 mod kernel;
 mod passes;
 pub mod readback;
@@ -24,6 +25,7 @@ mod scene;
 pub use scene::MAX_VOLUMES;
 mod targets;
 
+pub use budget::Caught;
 pub use records::Lighting;
 pub use targets::{COLOR, Image, Target, Targets};
 
@@ -80,6 +82,9 @@ pub struct Renderer {
     /// Counts scene group replacements: a view bound to an older one binds
     /// again.
     generation: u64,
+    /// The last scene didn't fit: the GPU holds an older one, which the
+    /// next replaces whole.
+    unfit: bool,
 }
 
 /// One view's frame: its uniform, its film textures and its bind groups.
@@ -103,6 +108,7 @@ impl Renderer {
             rims: Default::default(),
             fog: None,
             generation: 0,
+            unfit: false,
         }
     }
 
@@ -116,11 +122,24 @@ impl Renderer {
         &self.queue
     }
 
-    /// Takes `scene`, uploading what `changed` says.
-    pub fn set_scene(&mut self, scene: &Scene, changed: Changed) {
-        self.scene.set((&self.device, &self.queue), scene, changed);
+    /// Takes `scene`, uploading what `changed` says (all of it after a scene
+    /// that didn't fit); why not, when it doesn't fit the device.
+    pub fn set_scene(&mut self, scene: &Scene, changed: Changed) -> Result<(), String> {
+        let changed = if self.unfit { Changed::ALL } else { changed };
+        let caught = Caught::on(&self.device);
+        let set = self.scene.set((&self.device, &self.queue), scene, changed);
+        let set = caught.end().and(set);
+        self.unfit = set.is_err();
         self.generation += u64::from(changed.any());
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
+        set
+    }
+
+    /// Whether `film`'s textures, at the film's size and the view's, fit
+    /// the device; why not.
+    pub fn fits(&self, film: &Film) -> Result<(), String> {
+        let budget = budget::Budget::of(&self.device);
+        budget.view(film.view).and(budget.view(film.size))
     }
 
     /// A new view's frame.

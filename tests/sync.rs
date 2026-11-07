@@ -64,7 +64,7 @@ fn material(def: kinogaki_studio_api::NodeTypeId, values: &[(&str, Value)]) -> P
     })
 }
 
-/// Instance `k`'s corners in world space.
+/// Instance `k`'s vertices in world space.
 fn placed(scene: &kinogaki_pixel::render::Scene, k: usize) -> Vec<[f32; 3]> {
     let i = &scene.instances[k];
     let mesh = &scene.meshes[i.mesh as usize];
@@ -72,7 +72,7 @@ fn placed(scene: &kinogaki_pixel::render::Scene, k: usize) -> Vec<[f32; 3]> {
         i.to_world
             .map(|r| r[0] * p[0] + r[1] * p[1] + r[2] * p[2] + r[3])
     };
-    mesh.corners.iter().map(|&p| at(p)).collect()
+    mesh.positions.iter().map(|&p| at(p)).collect()
 }
 
 fn added(prims: Vec<(PrimId, Prim)>) -> SceneUpdate {
@@ -97,8 +97,9 @@ fn a_shape_is_a_world_space_mesh_tinted_by_its_material_attribute() {
     let ([mesh], [instance]) = (&scene.meshes[..], &scene.instances[..]) else {
         panic!("one mesh, placed once");
     };
-    assert_eq!(mesh.corners.len(), 6);
-    assert!(mesh.corners.iter().all(|p| p[2] == 0.0), "its own space");
+    // A vertex a point: its corners on a point hold the same.
+    assert_eq!((mesh.positions.len(), mesh.triangles.len()), (4, 2));
+    assert!(mesh.positions.iter().all(|p| p[2] == 0.0), "its own space");
     assert!(placed(scene, 0).iter().all(|p| p[2] == 5.0));
     assert_eq!(
         mesh.tints.as_deref().map(|t| t[0]),

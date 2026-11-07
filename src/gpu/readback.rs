@@ -1,51 +1,70 @@
 //! Textures read back to the CPU: a frame's pixels for a host that asks for
 //! them, a final frame's outputs and a preview's picture. Each read waits
-//! for the GPU, on the render thread.
+//! for the GPU, on the render thread, a band of rows at a time through one
+//! buffer of at most `BAND` bytes (a large final's outputs are more than a
+//! buffer of the device holds).
 use kinogaki_render_api::display::wgpu;
 
+/// The most bytes a band of rows reads through.
+const BAND: u64 = 64 << 20;
+
 /// The bytes of `texture` (a whole 2D texture of a 4-, 8- or 16-byte texel
-/// format), rows from the top, tightly packed.
+/// format), rows from the top, tightly packed; zeros where the device was
+/// lost.
 pub fn bytes(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Vec<u8> {
     let (width, height) = (texture.width(), texture.height());
     let texel = texture.format().block_copy_size(None).unwrap_or(4);
     let row = width * texel;
     let padded =
         row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let most = BAND.min(device.limits().max_buffer_size);
+    let rows = u32::try_from(most / u64::from(padded)).map_or(height, |r| r.clamp(1, height));
     let buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("pixel readback"),
-        size: u64::from(padded * height),
+        size: u64::from(padded) * u64::from(rows),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: Some("pixel readback"),
-    });
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(height),
+    let mut out = Vec::with_capacity(row as usize * height as usize);
+    for top in (0..height).step_by(rows as usize) {
+        let band = rows.min(height - top);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("pixel readback"),
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x: 0, y: top, z: 0 },
+                ..texture.as_image_copy()
             },
-        },
-        texture.size(),
-    );
-    queue.submit([encoder.finish()]);
-    let slice = buffer.slice(..);
-    slice.map_async(wgpu::MapMode::Read, |_| {});
-    // A lost device maps nothing: the read is all zeros.
-    let mapped = device.poll(wgpu::PollType::wait_indefinitely()).is_ok();
-    let mut out = Vec::with_capacity((row * height) as usize);
-    let data = slice.get_mapped_range();
-    if let (true, Ok(data)) = (mapped, data.as_ref()) {
-        for y in 0..height {
-            let from = (y * padded) as usize;
-            out.extend_from_slice(&data[from..from + row as usize]);
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(band),
+                },
+            },
+            wgpu::Extent3d {
+                width,
+                height: band,
+                depth_or_array_layers: 1,
+            },
+        );
+        queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..u64::from(padded) * u64::from(band));
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let mapped = device.poll(wgpu::PollType::wait_indefinitely()).is_ok();
+        let data = slice.get_mapped_range();
+        let end = out.len() + (row * band) as usize;
+        if let (true, Ok(data)) = (mapped, data.as_ref()) {
+            for y in 0..band {
+                let from = (y * padded) as usize;
+                out.extend_from_slice(&data[from..from + row as usize]);
+            }
         }
-    } else {
-        out.resize((row * height) as usize, 0);
+        drop(data);
+        buffer.unmap();
+        out.resize(end, 0);
     }
     out
 }

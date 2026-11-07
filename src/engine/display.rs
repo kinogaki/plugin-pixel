@@ -11,6 +11,7 @@
 use super::{Message, Own};
 use crate::gpu::Image;
 use crate::outputs::Output;
+use crate::render::film::Film;
 use kinogaki_render_api::display::{self, Display, Shown};
 use kinogaki_render_api::geometry::image::{self, metadata};
 use kinogaki_render_api::geometry::{Attribute, Domain, Meaning};
@@ -26,8 +27,12 @@ pub const IMAGES: usize = 3;
 
 /// One view's display images.
 pub struct Ring {
-    /// Which set of images: new each time the film changes size.
+    /// Which set of images: new each time the film or its outputs change.
     pub set: u64,
+    /// The film they are sized for.
+    pub film: Film,
+    /// The outputs each keeps, the beauty first: their formats.
+    pub outputs: Vec<Output>,
     /// The images.
     pub images: Vec<Arc<Image>>,
     /// The frame each holds (none while it is written).
@@ -37,10 +42,13 @@ pub struct Ring {
 }
 
 impl Ring {
-    /// The images of set `set`, holding nothing yet.
-    pub fn new(set: u64, images: Vec<Arc<Image>>) -> Ring {
+    /// The images of set `set`, for `film` keeping `outputs`, holding
+    /// nothing yet.
+    pub fn new(set: u64, (film, outputs): (Film, Vec<Output>), images: Vec<Arc<Image>>) -> Ring {
         Ring {
             set,
+            film,
+            outputs,
             holds: vec![None; images.len()],
             pins: (0..images.len()).map(|_| AtomicU32::new(0)).collect(),
             images,
@@ -156,12 +164,8 @@ impl Display for PixelDisplay {
             .filter(|(_, (o, _))| *o == Output::Beauty || wanted.contains(o))
             .map(|(k, (o, target))| (o.aov(), target.view.clone(), id(k)))
             .collect();
-        let size = [
-            image.film[0].1.texture.width(),
-            image.film[0].1.texture.height(),
-        ];
         let pin = Pin::new(ring, at, self.freed.clone());
-        let film = display::film(frame, size, images, pin)?;
+        let film = display::film(frame, ring.film.size, images, pin)?;
         pixelated(film)
     }
 

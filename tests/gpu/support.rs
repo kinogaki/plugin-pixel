@@ -37,7 +37,8 @@ pub fn pixel() -> (
     (engine, display, waiter, device)
 }
 
-fn id(slot: u32) -> PrimId {
+/// The prim id of slot `slot`.
+pub fn id(slot: u32) -> PrimId {
     PrimId {
         slot,
         generation: 0,

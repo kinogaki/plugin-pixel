@@ -57,7 +57,7 @@ fn hand_run_a_moved_object_beside_many_instances() {
         let start = Instant::now();
         let changed = sync.apply(update);
         let synced = start.elapsed();
-        renderer.set_scene(sync.scene(), changed);
+        (renderer.set_scene(sync.scene(), changed)).expect("the scene fits");
         queue.submit([]);
         device
             .poll(wgpu::PollType::wait_indefinitely())

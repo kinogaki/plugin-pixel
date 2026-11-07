@@ -1,13 +1,16 @@
 //! The scene on the GPU, in two levels: the meshes in their own space (the
-//! G-buffer's vertices, and each mesh's BVH) and the instances placing them
-//! (their records and the top-level BVH over them). The scene group every
-//! pass binds as group 1: the meshes' nodes and triangles, the top level's
-//! nodes, the volumes' BVH (nodes, triangles, records), the instances and
-//! the lights; beside it, the atlas of the pictures surfaces sample, which
-//! the G-buffer reads. Each part is replaced only when its source changes: a
-//! camera move touches none of it, an object's move the instances alone.
+//! G-buffer's vertices and triangles, and each mesh's BVH) and the instances
+//! placing them (their records and the top-level BVH over them). The scene
+//! group every pass binds as group 1: the meshes' nodes and triangles, the
+//! top level's nodes, the volumes' BVH (nodes, triangles, records), the
+//! instances and the lights; beside it, the atlas of the pictures surfaces
+//! sample, which the G-buffer reads. Each part is replaced only when its
+//! source changes: a camera move touches none of it, an object's move the
+//! instances alone. What changed is made and checked against the device
+//! ([`Budget`]) before any of it replaces what the GPU holds.
 use super::Changed;
 use super::atlas::Atlas;
+use super::budget::{Budget, Part};
 use super::kernel::{bind_group, storage};
 use super::records::{GpuInstance, GpuLight, GpuMedium, Vertex};
 use crate::render::bvh::{Bvh, Node, Tlas, Triangle};
@@ -21,14 +24,27 @@ use wgpu::util::DeviceExt;
 /// The most volumes a frame renders (a ray's inside set is a 32-bit mask).
 pub const MAX_VOLUMES: usize = 32;
 
-/// The meshes side by side: their vertices, and their BVHs in one array of
-/// nodes and one of triangles, each mesh's indices moved past the meshes
-/// before it.
+/// Where a mesh lies in the meshes' buffers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    /// Its triangles' run of indices.
+    pub indices: Range<u32>,
+    /// Its first vertex, which its indices count from.
+    pub base: u32,
+    /// Its BVH's root node.
+    pub root: u32,
+}
+
+/// The meshes side by side: their vertices and triangles, and their BVHs in
+/// one array of nodes and one of triangles, each mesh's indices moved past
+/// the meshes before it.
 pub struct Meshes {
-    /// Three vertices a triangle, each mesh's in a run.
+    /// Each mesh's vertices, in a run.
     pub vertices: Vec<Vertex>,
-    /// Each mesh's run of vertices, and its BVH's root node.
-    pub meshes: Vec<(Range<u32>, u32)>,
+    /// Three vertices a triangle, each mesh's counted from its first.
+    pub indices: Vec<u32>,
+    /// Where each mesh lies.
+    pub meshes: Vec<Span>,
     /// The BVHs' nodes.
     pub nodes: Vec<Node>,
     /// Their triangles, each with its corners' mean tint in its `w`s.
@@ -40,27 +56,29 @@ impl Meshes {
     pub fn build(meshes: &[Arc<Mesh>]) -> Meshes {
         let mut made = Meshes {
             vertices: Vec::new(),
+            indices: Vec::new(),
             meshes: Vec::new(),
             nodes: Vec::new(),
             triangles: Vec::new(),
         };
         for mesh in meshes {
-            let first = made.vertices.len() as u32;
-            for (t, triangle) in mesh.corners.as_chunks::<3>().0.iter().enumerate() {
-                let [a, b, c] = triangle.map(V3::of);
-                let face = (b - a).cross(c - a).to_array();
-                for (k, &position) in triangle.iter().enumerate() {
-                    let at = t * 3 + k;
-                    made.vertices.push(Vertex {
-                        position,
-                        normal: mesh.normals.as_ref().map_or(face, |n| n[at]),
-                        tint: mesh.tints.as_ref().map_or([1.0; 3], |c| c[at]),
-                        uv: mesh.uvs.as_ref().map_or([0.0; 2], |c| c[at]),
-                    });
-                }
-            }
+            let tint = |v: u32| mesh.tints.as_ref().map_or([1.0; 3], |c| c[v as usize]);
+            let base = made.vertices.len() as u32;
+            made.vertices
+                .extend((0..mesh.positions.len()).map(|v| Vertex {
+                    position: mesh.positions[v],
+                    normal: mesh.normals[v],
+                    tint: tint(v as u32),
+                    uv: mesh.uvs.as_ref().map_or([0.0; 2], |c| c[v]),
+                }));
+            let first = made.indices.len() as u32;
+            made.indices.extend(mesh.triangles.iter().flatten());
             let (nodes, triangles) = (made.nodes.len() as u32, made.triangles.len() as u32);
-            made.meshes.push((first..made.vertices.len() as u32, nodes));
+            made.meshes.push(Span {
+                indices: first..made.indices.len() as u32,
+                base,
+                root: nodes,
+            });
             made.nodes.extend(mesh.bvh.nodes.iter().map(|n| Node {
                 a: n.a + if n.count == 0 { nodes } else { triangles },
                 ..*n
@@ -68,9 +86,9 @@ impl Meshes {
             let tinted = (mesh.bvh.triangles.iter())
                 .zip(&mesh.bvh.order)
                 .map(|(tri, &t)| {
-                    let at = &made.vertices[(first as usize + t as usize * 3)..][..3];
+                    let corners = mesh.triangles[t as usize].map(tint);
                     let [r, g, b] =
-                        std::array::from_fn(|k| at.iter().map(|v| v.tint[k]).sum::<f32>() / 3.0);
+                        std::array::from_fn(|k| corners.iter().map(|c| c[k]).sum::<f32>() / 3.0);
                     let mut tri = *tri;
                     (tri.v0[3], tri.e1[3], tri.e2[3]) = (r, g, b);
                     tri
@@ -78,6 +96,16 @@ impl Meshes {
             made.triangles.extend(tinted);
         }
         made
+    }
+
+    /// What they put on the device.
+    fn parts(&self) -> [Part; 4] {
+        [
+            Part::of("its vertices", &self.vertices, false),
+            Part::of("its vertex indices", &self.indices, false),
+            Part::of("its hierarchy's nodes", &self.nodes, true),
+            Part::of("its traced triangles", &self.triangles, true),
+        ]
     }
 }
 
@@ -92,8 +120,8 @@ pub struct Instances {
     pub tlas: Tlas,
     /// The records, by mesh: the G-buffer's instance buffer.
     pub drawn: Vec<u32>,
-    /// A draw a mesh: its vertices, and its run of `drawn`.
-    pub draws: Vec<(Range<u32>, Range<u32>)>,
+    /// A draw a mesh: where it lies, and its run of `drawn`.
+    pub draws: Vec<(Span, Range<u32>)>,
 }
 
 impl Instances {
@@ -114,7 +142,7 @@ impl Instances {
             .map(|i| {
                 GpuInstance::of(
                     i,
-                    meshes.meshes[i.mesh as usize].1,
+                    meshes.meshes[i.mesh as usize].root,
                     surface(surfaces, i.surface),
                     atlas,
                 )
@@ -122,13 +150,13 @@ impl Instances {
             .collect();
         let mut drawn: Vec<u32> = (0..placed.len() as u32).collect();
         drawn.sort_by_key(|&k| placed[k as usize].mesh);
-        let mut draws: Vec<(Range<u32>, Range<u32>)> = Vec::new();
+        let mut draws: Vec<(Span, Range<u32>)> = Vec::new();
         for (at, &k) in drawn.iter().enumerate() {
-            let vertices = meshes.meshes[placed[k as usize].mesh as usize].0.clone();
+            let span = &meshes.meshes[placed[k as usize].mesh as usize];
             let at = at as u32;
             match draws.last_mut() {
-                Some((v, run)) if *v == vertices => run.end = at + 1,
-                _ => draws.push((vertices, at..at + 1)),
+                Some((s, run)) if s == span => run.end = at + 1,
+                _ => draws.push((span.clone(), at..at + 1)),
             }
         }
         Instances {
@@ -145,6 +173,15 @@ impl Instances {
         for (record, &index) in self.records.iter_mut().zip(&self.surfaces) {
             record.set_surface(surface(surfaces, index), atlas);
         }
+    }
+
+    /// What they put on the device.
+    fn parts(&self) -> [Part; 3] {
+        [
+            Part::of("its instances", &self.records, true),
+            Part::of("its drawn instances", &self.drawn, false),
+            Part::of("its instances' nodes", &self.tlas.nodes, true),
+        ]
     }
 }
 
@@ -236,6 +273,15 @@ impl Media {
             counts,
         }
     }
+
+    /// What they put on the device.
+    fn parts(&self) -> [Part; 3] {
+        [
+            Part::of("its volumes", &self.records, true),
+            Part::of("its volumes' nodes", &self.bvh.nodes, true),
+            Part::of("its volumes' triangles", &self.bvh.triangles, true),
+        ]
+    }
 }
 
 /// A storage (or vertex) buffer holding `data`, or one zeroed `T` when empty
@@ -257,6 +303,7 @@ fn buffer<T: bytemuck::Pod + Default>(
 
 const STORAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE;
 const VERTEX: wgpu::BufferUsages = wgpu::BufferUsages::VERTEX;
+const INDEX: wgpu::BufferUsages = wgpu::BufferUsages::INDEX;
 
 /// The scene group's bindings.
 const NODES: usize = 0;
@@ -270,8 +317,10 @@ const LIGHTS: usize = 7;
 
 /// The scene's buffers and its group.
 pub struct GpuScene {
-    /// The meshes' vertices, three a triangle.
+    /// The meshes' vertices.
     pub vertices: wgpu::Buffer,
+    /// Their triangles: three vertices each.
+    pub indices: wgpu::Buffer,
     /// The instances by mesh (`Instances::drawn`), one a drawn instance.
     pub drawn: wgpu::Buffer,
     /// The scene group's layout.
@@ -312,6 +361,7 @@ impl GpuScene {
             texels: texels(device, queue, &atlas),
             atlas: (Vec::new(), atlas),
             vertices: buffer::<Vertex>(device, "pixel vertices", &[], VERTEX),
+            indices: buffer::<u32>(device, "pixel indices", &[], INDEX),
             drawn: buffer::<u32>(device, "pixel drawn", &[], VERTEX),
             group: Self::bind(device, &layout, &buffers),
             layout,
@@ -321,37 +371,56 @@ impl GpuScene {
             volumes: (0, 0),
             lights: 0,
         };
-        made.set((device, queue), &Scene::default(), Changed::ALL);
+        (made.set((device, queue), &Scene::default(), Changed::ALL))
+            .expect("an empty scene fits any device");
         made
     }
 
-    /// Takes what `changed` says of `scene`.
+    /// Takes what `changed` says of `scene`; nothing, saying why, when a
+    /// part of it is larger than the device's buffers hold.
     pub fn set(
         &mut self,
         (device, queue): (&wgpu::Device, &wgpu::Queue),
         scene: &Scene,
         changed: Changed,
-    ) {
+    ) -> Result<(), String> {
+        let budget = Budget::of(device);
         let repacked = changed.surfaces && !same_pictures(&self.atlas.0, &scene.pictures);
-        if repacked {
-            let atlas = Atlas::pack(&scene.pictures);
+        let atlas = repacked.then(|| Atlas::pack(&scene.pictures));
+        let meshes = changed.meshes.then(|| Meshes::build(&scene.meshes));
+        let instances = (changed.meshes || changed.instances).then(|| {
+            let laid = meshes.as_ref().unwrap_or(&self.meshes);
+            let atlas = atlas.as_ref().unwrap_or(&self.atlas.1);
+            Instances::build(
+                &scene.instances,
+                (laid, &scene.meshes),
+                &scene.surfaces,
+                atlas,
+            )
+        });
+        let media = changed.volumes.then(|| Media::build(&scene.volumes));
+        let lights = changed
+            .lights
+            .then(|| scene.lights.iter().map(GpuLight::of).collect::<Vec<_>>());
+        let parts: Vec<Part> = (meshes.iter().flat_map(Meshes::parts))
+            .chain(instances.iter().flat_map(Instances::parts))
+            .chain(media.iter().flat_map(Media::parts))
+            .chain(lights.iter().map(|l| Part::of("its lights", l, true)))
+            .collect();
+        budget.holds(&parts)?;
+        // Everything fits: it replaces what the GPU holds.
+        if let Some(atlas) = atlas {
             self.texels = texels(device, queue, &atlas);
             self.atlas = (scene.pictures.clone(), atlas);
         }
-        if changed.meshes {
-            let m = Meshes::build(&scene.meshes);
+        if let Some(m) = meshes {
             self.vertices = buffer(device, "pixel vertices", &m.vertices, VERTEX);
+            self.indices = buffer(device, "pixel indices", &m.indices, INDEX);
             self.buffers[NODES] = buffer(device, "pixel nodes", &m.nodes, STORAGE);
             self.buffers[TRIANGLES] = buffer(device, "pixel triangles", &m.triangles, STORAGE);
             self.meshes = m;
         }
-        if changed.meshes || changed.instances {
-            let i = Instances::build(
-                &scene.instances,
-                (&self.meshes, &scene.meshes),
-                &scene.surfaces,
-                &self.atlas.1,
-            );
+        if let Some(i) = instances {
             self.drawn = buffer(device, "pixel drawn", &i.drawn, VERTEX);
             self.buffers[TOP] = buffer(device, "pixel top nodes", &i.tlas.nodes, STORAGE);
             self.buffers[INSTANCES] = buffer(device, "pixel instances", &i.records, STORAGE);
@@ -361,8 +430,7 @@ impl GpuScene {
             let records = &self.instances.records;
             self.buffers[INSTANCES] = buffer(device, "pixel instances", records, STORAGE);
         }
-        if changed.volumes {
-            let media = Media::build(&scene.volumes);
+        if let Some(media) = media {
             self.buffers[MEDIUM_NODES] =
                 buffer(device, "pixel medium nodes", &media.bvh.nodes, STORAGE);
             self.buffers[MEDIUM_TRIANGLES] = buffer(
@@ -374,14 +442,14 @@ impl GpuScene {
             self.buffers[MEDIA] = buffer(device, "pixel media", &media.records, STORAGE);
             self.volumes = media.counts;
         }
-        if changed.lights {
-            let packed: Vec<GpuLight> = scene.lights.iter().map(GpuLight::of).collect();
-            self.buffers[LIGHTS] = buffer(device, "pixel lights", &packed, STORAGE);
-            self.lights = packed.len() as u32;
+        if let Some(lights) = lights {
+            self.buffers[LIGHTS] = buffer(device, "pixel lights", &lights, STORAGE);
+            self.lights = lights.len() as u32;
         }
         if changed.any() {
             self.group = Self::bind(device, &self.layout, &self.buffers);
         }
+        Ok(())
     }
 
     /// The bounds of what is drawn (none when nothing is).
@@ -412,14 +480,20 @@ impl GpuScene {
 mod tests {
     use super::*;
 
+    /// A unit square at height `z`: its points and two triangles.
+    fn square(z: f32) -> ([[f32; 3]; 4], [[u32; 3]; 2]) {
+        let points = [[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]];
+        (points, [[0, 1, 2], [0, 2, 3]])
+    }
+
     fn quad(z: f32) -> Mesh {
-        let [a, b, c, d] = [[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]];
+        let (points, triangles) = square(z);
         let tints = Some(vec![[0.5; 3]; 6]);
         let held = crate::render::Corners {
             tints,
             ..Default::default()
         };
-        Mesh::new(vec![a, b, c, a, c, d], held)
+        Mesh::new(&points, &triangles, held)
     }
 
     /// Placed `dx` along X, in material `surface`.
@@ -444,7 +518,9 @@ mod tests {
     fn meshes_lie_side_by_side_and_instances_draw_by_mesh() {
         let meshes = [Arc::new(quad(0.0)), Arc::new(quad(1.0))];
         let m = Meshes::build(&meshes);
-        assert_eq!(m.vertices.len(), 12);
+        // A vertex a point (the diagonal's shared), three indices a triangle.
+        assert_eq!((m.vertices.len(), m.indices.len()), (8, 12));
+        assert_eq!(&m.indices[6..], [0, 1, 2, 0, 2, 3]);
         // Flat normals face +Z; each triangle's mean tint rides in its w's.
         assert_eq!(m.vertices[0].normal, [0.0, 0.0, 1.0]);
         assert!(
@@ -454,8 +530,9 @@ mod tests {
         );
         // The second mesh's nodes and triangles are moved past the first's.
         let (first, second) = (&m.meshes[0], &m.meshes[1]);
-        assert_eq!((first.0.clone(), second.0.clone()), (0..6, 6..12));
-        let root = m.nodes[second.1 as usize];
+        assert_eq!((first.indices.clone(), first.base), (0..6, 0));
+        assert_eq!((second.indices.clone(), second.base), (6..12, 4));
+        let root = m.nodes[second.root as usize];
         assert!(root.count > 0 && root.a >= meshes[0].bvh.triangles.len() as u32);
         let surfaces = [
             crate::render::Surface {
@@ -477,13 +554,15 @@ mod tests {
         ];
         let i = Instances::build(&placed, (&m, &meshes), &surfaces, &Atlas::pack(&[]));
         // Two draws: mesh 0 once, mesh 1 twice.
-        let runs: Vec<_> = i.draws.iter().map(|(v, r)| (v.clone(), r.len())).collect();
+        let runs: Vec<_> = (i.draws.iter())
+            .map(|(span, r)| (span.indices.clone(), r.len()))
+            .collect();
         assert_eq!(runs, [(0..6, 1), (6..12, 2)]);
         assert_eq!(i.tlas.bounds(), Some(([0.0, 0.0, 0.0], [5.0, 1.0, 1.0])));
         let of = |dx: f32| i.records.iter().find(|r| r.to_world[0][3] == dx).unwrap();
         assert_eq!(of(0.0).albedo, [0.2, 0.3, 0.4, 0.0]);
         assert_eq!(of(0.0).transmit, [0.5, 0.25, 0.0, 0.0]);
-        assert_eq!(of(0.0).id, [7, second.1, 0, 0]);
+        assert_eq!(of(0.0).id, [7, second.root, 0, 0]);
         // An unlit one says so in its transmittance's w; a material past the
         // table is the default surface.
         assert_eq!(of(4.0).transmit, [0.0, 0.0, 0.0, 1.0]);
@@ -492,8 +571,12 @@ mod tests {
 
     #[test]
     fn media_carry_their_volumes_index() {
+        let (points, triangles) = square(0.0);
+        let corners: Vec<[f32; 3]> = (triangles.iter().flatten())
+            .map(|&p| points[p as usize])
+            .collect();
         let box_of = |shadows| Volume {
-            corners: quad(0.0).corners,
+            corners: corners.clone(),
             to_own: [
                 [1.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],

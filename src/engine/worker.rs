@@ -4,13 +4,13 @@
 use super::display::{IMAGES, Ring, Shared, image_key};
 use super::readings::answer;
 use super::{Message, Own};
-use crate::gpu::{Image, Renderer, Viewport, readback};
+use crate::gpu::{Caught, Image, Renderer, Viewport, readback};
 use crate::outputs::Output;
 use crate::render::film::Film;
 use crate::render::settings::Settings;
 use crate::sync::Sync;
 use kinogaki_render_api::display::wgpu;
-use kinogaki_render_api::geometry::Diagnostic;
+use kinogaki_render_api::geometry::{Diagnostic, Error};
 use kinogaki_render_api::thread::{Mailbox, PREVIEW, Published, Reading, lock};
 use kinogaki_render_api::{Frame, RenderStats, SceneUpdate, ViewDesc, ViewId, Wake};
 use std::collections::BTreeMap;
@@ -31,6 +31,8 @@ struct View {
     drops: u64,
     /// It needs a frame.
     dirty: bool,
+    /// Why it couldn't render its newest edit: what its reads fail with.
+    failed: Option<String>,
     paused: bool,
     /// The outputs its images keep beside the beauty.
     kept: Vec<Output>,
@@ -57,6 +59,9 @@ pub(super) struct Worker {
     /// and what was reported last, so each is said once.
     problems: Vec<Diagnostic>,
     said: Vec<Diagnostic>,
+    /// Why the scene doesn't fit the device: every view fails with it until
+    /// a scene does.
+    unfit: Option<String>,
 }
 
 impl Worker {
@@ -81,6 +86,7 @@ impl Worker {
             sets: 0,
             problems: Vec::new(),
             said: Vec::new(),
+            unfit: None,
         }
     }
 
@@ -184,6 +190,7 @@ impl Worker {
                     filmed: None,
                     drops: lock(&self.published).drops(id),
                     dirty: true,
+                    failed: None,
                     paused: false,
                     kept: shared.kept.get(&id).cloned().unwrap_or_default(),
                 };
@@ -193,13 +200,14 @@ impl Worker {
         }
     }
 
-    /// Applies the updates waiting: every view renders again.
+    /// Applies the updates waiting: every view renders again. A scene that
+    /// doesn't fit the device fails every view, saying why, until one does.
     fn apply(&mut self) {
         let Some(update) = self.pending.take() else {
             return;
         };
         let changed = self.sync.apply(update);
-        self.renderer.set_scene(self.sync.scene(), changed);
+        self.unfit = self.renderer.set_scene(self.sync.scene(), changed).err();
         let problems = self.sync.problems();
         if problems != self.said {
             self.said.clone_from(&problems);
@@ -230,59 +238,74 @@ impl Worker {
         }
     }
 
-    /// One frame of view `id`, when it has a free image.
-    fn render_view(&mut self, id: ViewId) {
+    /// View `id` can't render: it says why (waking the host once), and its
+    /// reads fail saying so.
+    fn fail(&mut self, id: ViewId, why: String) {
         let Some(view) = self.views.get_mut(&id) else {
             return;
         };
-        let Some(camera) = self.sync.camera(&view.desc.camera) else {
-            view.dirty = false;
-            let why = Diagnostic::error("the view's camera isn't in the scene");
-            if lock(&self.published).fail(id, why, view.drops) {
-                (self.wake)();
-            }
-            return;
-        };
-        let size = [view.desc.width, view.desc.height];
-        let film = Film::new(size[0], size[1], view.settings.pixel_size);
-        if film.is_empty() {
-            view.dirty = false;
-            return;
+        view.dirty = false;
+        view.failed = Some(why.clone());
+        if lock(&self.published).fail(id, Diagnostic::error(why), view.drops) {
+            (self.wake)();
         }
-        // The image to write, in a ring sized for this film.
+    }
+
+    /// An image view `id` may write, in a ring made for `film` and the
+    /// outputs it keeps: the image, its set and its place in the ring.
+    fn image(&mut self, id: ViewId, film: Film) -> Option<(Arc<Image>, u64, usize)> {
+        let kept = &self.views.get(&id)?.kept;
         let mut shared = lock(&self.shared);
         let outputs: Vec<Output> = [Output::Beauty]
             .into_iter()
-            .chain(view.kept.iter().copied())
+            .chain(kept.iter().copied())
             .collect();
-        let fits = shared.rings.get(&id).is_some_and(|r| {
-            let image = &r.images[0];
-            image.shown.texture.size().width == size[0]
-                && image.shown.texture.size().height == size[1]
-                && image.film[0].1.texture.size().width == film.size[0]
-                && image
-                    .film
-                    .iter()
-                    .map(|(o, _)| *o)
-                    .eq(outputs.iter().copied())
-        });
+        let fits = (shared.rings.get(&id)).is_some_and(|r| r.film == film && r.outputs == outputs);
         if !fits {
             self.sets += 1;
             let device = self.renderer.device();
             let images = (0..IMAGES)
-                .map(|_| Arc::new(Image::new(device, film, &view.kept)))
+                .map(|_| Arc::new(Image::new(device, film, kept)))
                 .collect();
-            shared.rings.insert(id, Ring::new(self.sets, images));
+            let ring = Ring::new(self.sets, (film, outputs), images);
+            shared.rings.insert(id, ring);
         }
         let newest = lock(&self.published).latest(id).cloned();
-        let ring = shared.rings.get_mut(&id).expect("a ring");
-        let Some(at) = ring.free(newest.as_ref()) else {
+        let ring = shared.rings.get_mut(&id)?;
+        let at = ring.free(newest.as_ref())?;
+        ring.holds[at] = None;
+        Some((ring.images[at].clone(), ring.set, at))
+    }
+
+    /// One frame of view `id`, when it has a free image; why not, when it
+    /// can't render: the scene doesn't fit the device, its camera isn't in
+    /// the scene, its film is larger than the device's textures, or the
+    /// device refused the frame.
+    fn render_view(&mut self, id: ViewId) {
+        let Some(view) = self.views.get(&id) else {
             return;
         };
-        ring.holds[at] = None;
-        let (image, set) = (ring.images[at].clone(), ring.set);
-        drop(shared);
+        let size = [view.desc.width, view.desc.height];
+        let film = Film::new(size[0], size[1], view.settings.pixel_size);
+        let camera = match (&self.unfit, self.sync.camera(&view.desc.camera)) {
+            (Some(unfit), _) => Err(unfit.clone()),
+            (None, None) => Err("the view's camera isn't in the scene".to_owned()),
+            (None, Some(camera)) => self.renderer.fits(&film).map(|()| camera),
+        };
+        let camera = match camera {
+            Ok(camera) => camera,
+            Err(why) => return self.fail(id, why),
+        };
+        if film.is_empty() {
+            self.views.get_mut(&id).expect("a view").dirty = false;
+            return;
+        }
         let device = self.renderer.device().clone();
+        let caught = Caught::on(&device);
+        let Some((image, set, at)) = self.image(id, film) else {
+            return;
+        };
+        let view = self.views.get_mut(&id).expect("a view");
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("pixel frame"),
         });
@@ -294,16 +317,26 @@ impl Worker {
         );
         self.renderer.queue().submit([encoder.finish()]);
         // The frame is published once the GPU has finished it.
-        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let polled = device.poll(wgpu::PollType::wait_indefinitely());
+        let lost = polled
+            .map(drop)
+            .map_err(|e| format!("the GPU was lost: {e}"));
         view.dirty = false;
         view.filmed = rendered.is_some().then_some(view.generation);
-        if rendered.is_none() || id == PREVIEW {
+        let refused = caught.end().and(lost).err();
+        if rendered.is_none() || id == PREVIEW || refused.is_some() {
             let mut shared = lock(&self.shared);
             if let Some(ring) = shared.rings.get_mut(&id) {
                 ring.holds[at] = None;
             }
+            drop(shared);
+            if let Some(why) = refused {
+                view.filmed = None;
+                self.fail(id, why);
+            }
             return;
         }
+        view.failed = None;
         let pixels: Arc<[u16]> = match self.read_pixels {
             true => readback::halves(&device, self.renderer.queue(), &image.shown.texture).into(),
             false => Arc::from([]),
@@ -351,6 +384,10 @@ impl Worker {
             };
             if view.dirty {
                 self.readings.push((id, reading));
+                continue;
+            }
+            if let Some(why) = &view.failed {
+                reading.fail(Error::invalid(why.clone()));
                 continue;
             }
             // Its film only while it shows the view's newest edit: a view

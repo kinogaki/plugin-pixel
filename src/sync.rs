@@ -410,12 +410,12 @@ impl Sync {
                     .flat_map(|&t| (0..3).map(move |k| list[3 * t + k]))
                     .collect()
             };
-            let positions: Vec<[f32; 3]> = ts
-                .iter()
-                .flat_map(|&t| triangles[t].map(|p| points[p as usize]))
-                .collect();
+            let group: Vec<[u32; 3]> = ts.iter().map(|&t| triangles[t]).collect();
             match self.material(material) {
-                Material::Volume(_) => made.volumes.push((material, positions)),
+                Material::Volume(_) => {
+                    let corners = group.iter().flatten().map(|&p| points[p as usize]);
+                    made.volumes.push((material, corners.collect()));
+                }
                 Material::Surface(_, look) => {
                     let tints = look.tint().and_then(|a| shape.corners::<3>(triangles, a));
                     let uvs =
@@ -429,8 +429,8 @@ impl Sync {
                                 .collect()
                         }),
                     };
-                    made.meshes
-                        .push((material, Arc::new(Mesh::new(positions, held))));
+                    let mesh = Mesh::new(points.as_slice(), &group, held);
+                    made.meshes.push((material, Arc::new(mesh)));
                 }
             }
         }

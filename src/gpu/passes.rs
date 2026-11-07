@@ -366,8 +366,9 @@ impl Passes {
         pass.set_bind_group(1, &scene.group, &[]);
         pass.set_vertex_buffer(0, scene.vertices.slice(..));
         pass.set_vertex_buffer(1, scene.drawn.slice(..));
-        for (vertices, instances) in &scene.instances.draws {
-            pass.draw(vertices.clone(), instances.clone());
+        pass.set_index_buffer(scene.indices.slice(..), wgpu::IndexFormat::Uint32);
+        for (span, instances) in &scene.instances.draws {
+            pass.draw_indexed(span.indices.clone(), span.base as i32, instances.clone());
         }
     }
 }

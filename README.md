@@ -35,8 +35,8 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 
 | Module | Role |
 |---|---|
-| `render` | The renderer, knowing no SDK: the scene (meshes in their own space and the instances placing them), `film`, `camera`, `bvh` (binned SAH in two levels: a BVH a mesh, built when it is made, and a top level over the instances, built when one moves), `dither`, `settings` |
-| `gpu` | The passes on the host's device (the G-buffer draws each mesh once for its instances; rays walk the top level, then each instance's mesh in its own space), the atlas of pictures the G-buffer samples, their records and shaders (`gpu/shaders`) |
+| `render` | The renderer, knowing no SDK: the scene (meshes in their own space, a vertex each distinct corner, and the instances placing them), `film`, `camera`, `bvh` (binned SAH in two levels: a BVH a mesh, built when it is made, and a top level over the instances, built when one moves), `dither`, `settings` |
+| `gpu` | The passes on the host's device (the G-buffer draws each mesh once for its instances; rays walk the top level, then each instance's mesh in its own space), the atlas of pictures the G-buffer samples, their records and shaders (`gpu/shaders`). A scene or a film larger than the device's buffers and textures hold (wgpu's limits as the host asked for them) is never made: every view it touches fails saying why, and renders again once it fits; what the device refuses besides is caught the same way |
 | `description`, `settings`, `outputs` | What a host reads: capabilities, settings, outputs |
 | `nodes`, `presets` | Pixel Surface and Pixel Volume, what a network renders as (Surface Unlit too), their display approximation, standard form and translation; the starting materials |
 | `sampled` | The texture nodes Pixel samples, read: coordinates, placement, wraps, filter, factors |

@@ -408,13 +408,14 @@ mod tests {
         }
     }
 
-    /// The slab test against a node's bounds, up to `limit`.
+    /// The slab test against a node's bounds, up to `limit`; an empty box
+    /// (min above max) is entered by no ray.
     fn hits_box(node: &Node, o: V3, inv: V3, limit: f32) -> bool {
         let t0 = (V3::of(node.min) - o) * inv;
         let t1 = (V3::of(node.max) - o) * inv;
         let near = t0.min(t1).max_element().max(0.0);
         let far = t0.max(t1).min_element().min(limit);
-        near <= far
+        near <= far && (0..3).all(|k| node.min[k] <= node.max[k])
     }
 
     /// Möller–Trumbore: the hit distance, when positive.
@@ -662,5 +663,26 @@ mod tests {
         assert_eq!(bvh.nodes.len(), 1);
         assert_eq!(bvh.triangles.len(), 1);
         assert!(!bvh.occluded([0.0; 3], [0.0, 0.0, -1.0], 1e9));
+    }
+
+    #[test]
+    fn no_ray_enters_the_top_level_of_no_instances() {
+        // Its one leaf's box is empty (min above max), which the slab test
+        // alone enters from anywhere, in any direction: the traversals would
+        // then walk the zeroed instance standing in for none.
+        let root = Tlas::build(&[]).nodes[0];
+        let (o, d) = (V3::new(0.3, -2.0, 5.0), V3::new(0.0, 0.6, -0.8));
+        let slabs = |node: &Node| {
+            let (t0, t1) = ((V3::of(node.min) - o) / d, (V3::of(node.max) - o) / d);
+            t0.min(t1).max_element().max(0.0) <= t0.max(t1).min_element()
+        };
+        assert!(slabs(&root), "the slabs alone enter it");
+        assert!(!hits_box(&root, o, V3::ONE / d, f32::INFINITY));
+        assert!(!hits_box(
+            &root,
+            V3::ZERO,
+            V3::ONE / V3::new(0.0, 0.0, 1.0),
+            1e9
+        ));
     }
 }

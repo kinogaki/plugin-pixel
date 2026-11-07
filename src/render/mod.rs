@@ -8,8 +8,11 @@ pub mod bvh;
 pub mod camera;
 pub mod dither;
 pub mod film;
+mod mesh;
 pub mod settings;
 pub mod vector;
+
+pub use mesh::{Corners, Mesh};
 
 use std::sync::Arc;
 
@@ -35,55 +38,6 @@ pub struct Scene {
     pub rims: Rims,
     /// The height fog, when there is one.
     pub fog: Option<Fog>,
-}
-
-/// Triangles of one material: three corners a triangle, in their own space,
-/// with the hierarchy rays trace them by.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Mesh {
-    /// Corner positions.
-    pub corners: Vec<[f32; 3]>,
-    /// Corner shading normals (none: flat).
-    pub normals: Option<Vec<[f32; 3]>>,
-    /// What each corner's albedo is multiplied by (the material's color
-    /// attribute; none: white).
-    pub tints: Option<Vec<[f32; 3]>>,
-    /// Each corner's texture coordinates, which the material's texture
-    /// reads (none: it has none).
-    pub uvs: Option<Vec<[f32; 2]>>,
-    /// The hierarchy over its triangles.
-    pub bvh: bvh::Bvh,
-}
-
-/// What a mesh holds at each corner beside its position.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Corners {
-    /// Shading normals (none: flat).
-    pub normals: Option<Vec<[f32; 3]>>,
-    /// What the albedo is multiplied by (none: white).
-    pub tints: Option<Vec<[f32; 3]>>,
-    /// Texture coordinates (none: none).
-    pub uvs: Option<Vec<[f32; 2]>>,
-}
-
-impl Mesh {
-    /// The mesh of `corners` (whole triangles: a partial one is dropped),
-    /// what it holds at them kept only where it matches them, its hierarchy
-    /// built.
-    pub fn new(mut corners: Vec<[f32; 3]>, held: Corners) -> Mesh {
-        corners.truncate(corners.len() / 3 * 3);
-        let fits = |c: Option<Vec<[f32; 3]>>| c.filter(|c| c.len() == corners.len());
-        let (normals, tints) = (fits(held.normals), fits(held.tints));
-        let uvs = held.uvs.filter(|c| c.len() == corners.len());
-        let bvh = bvh::Bvh::build(corners.as_chunks::<3>().0);
-        Mesh {
-            corners,
-            normals,
-            tints,
-            uvs,
-            bvh,
-        }
-    }
 }
 
 /// A picture a surface samples: linear ACEScg texels, straight (not
