@@ -28,10 +28,11 @@ use crate::sampled::{Sampled, is_texture, sampled};
 use kinogaki_render_api::geometry::image::{self, Sampling};
 use kinogaki_render_api::geometry::names;
 use kinogaki_render_api::material::mtlx;
+use kinogaki_render_api::materialx::Type;
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
     DisplayTexture, MaterialDisplay, MaterialNetwork, MaterialRules, NetworkBuilder, NodeDef,
-    NodeIndex, NodeInput, Parameter, Section, Socket,
+    NodeIndex, NodeInput, Parameter, Section,
 };
 use kinogaki_studio_api::NodeTypeId;
 use std::collections::BTreeMap;
@@ -81,7 +82,7 @@ fn tip(input: NodeInput, tooltip: &str, decimals: u8) -> NodeInput {
 fn surface() -> NodeDef {
     let color = Parameter::new("color", "Color", ValueKind::Color, [0.8; 3]).group(MAIN);
     let mut def = NodeDef::new(SURFACE, "Pixel Surface", "Surface")
-        .input(NodeInput::Driven(color, Socket::Color3))
+        .input(NodeInput::Driven(color, Type::Color3))
         .input(tip(
             value(
                 "attribute",
