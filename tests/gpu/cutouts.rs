@@ -10,7 +10,7 @@ use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample
 use kinogaki_render_api::geometry::{
     Attribute, Column, Domain, Meaning, Sampled, Vec3, Xform, names,
 };
-use kinogaki_render_api::standard::{self, Light, Shape as LightShape};
+use kinogaki_render_api::standard::{self, Light, LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
     AovDesc, AovFormat, Camera, Declared, Id, Material, Prim, Projection, SceneUpdate, Shape,

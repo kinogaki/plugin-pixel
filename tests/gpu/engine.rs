@@ -8,7 +8,7 @@ use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::display::Texture;
 use kinogaki_render_api::geometry::image::{Image, metadata};
 use kinogaki_render_api::geometry::{Attribute, Domain, Meaning, Vec3, names};
-use kinogaki_render_api::standard::{Light, Shape as LightShape};
+use kinogaki_render_api::standard::{Light, LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
     AovDesc, AovFormat, Dirty, PreviewLighting, PreviewRequest, PreviewShape, Prim, PrimChange,
@@ -255,7 +255,7 @@ fn a_zero_normal_shades_as_its_triangles_own() {
     let zero = Attribute::tuples(vec![[0.0f32; 3]; 8], Meaning::Normal).expect("normals");
     let zeroed = held.rebuilt().primvar(Domain::Point, names::N, zero);
     engine.update(SceneUpdate {
-        changed: vec![Change::new(
+        changed: vec![PrimChange::new(
             box_id,
             Dirty::PRIMVARS,
             Prim::Shape(zeroed.build().expect("the box")),

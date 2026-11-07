@@ -148,9 +148,7 @@ pub fn unlit_cutout(texture: PrimId, values: &[(&str, Value)]) -> MaterialNetwor
     built.link(t, "outcolor", s, "emission_color").unwrap();
     built.link(t, "outa", s, "opacity").unwrap();
     let mut network = built.build(s).unwrap();
-    network.nodes_mut()[t as usize]
-        .textures
-        .insert("file".into(), Id::of(texture));
+    network.set_texture(t, "file", Id::of(texture)).unwrap();
     network
 }
 
