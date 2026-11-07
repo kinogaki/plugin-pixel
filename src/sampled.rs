@@ -60,7 +60,7 @@ pub fn is_texture(network: &MaterialNetwork, at: u32) -> bool {
 
 /// The MaterialX node `at` is, by name; empty for another.
 fn kind(network: &MaterialNetwork, at: u32) -> &str {
-    (network.nodes()[at as usize].def.mtlx()).map_or("", |d| d.node.as_str())
+    (network.nodes()[at as usize].def().mtlx()).map_or("", |d| d.node.as_str())
 }
 
 /// What drives input `input` of `at`.
@@ -72,7 +72,7 @@ fn driver(network: &MaterialNetwork, at: u32, input: &str) -> Option<u32> {
 
 /// Two numbers of value `name` of node `at`.
 fn pair(network: &MaterialNetwork, at: u32, name: &str, default: [f64; 2]) -> [f64; 2] {
-    match network.nodes()[at as usize].values.get(name) {
+    match network.nodes()[at as usize].values().get(name) {
         Some(Value::Numbers(n)) if n.len() == 2 => [n[0], n[1]],
         Some(Value::Number(n)) => [*n; 2],
         _ => default,
@@ -80,12 +80,12 @@ fn pair(network: &MaterialNetwork, at: u32, name: &str, default: [f64; 2]) -> [f
 }
 
 fn number(network: &MaterialNetwork, at: u32, name: &str, default: f64) -> f64 {
-    let v = network.nodes()[at as usize].values.get(name);
+    let v = network.nodes()[at as usize].values().get(name);
     v.and_then(Value::number).unwrap_or(default)
 }
 
 fn integer(network: &MaterialNetwork, at: u32, name: &str) -> i64 {
-    let v = network.nodes()[at as usize].values.get(name);
+    let v = network.nodes()[at as usize].values().get(name);
     v.and_then(Value::integer).unwrap_or(0)
 }
 
@@ -96,7 +96,7 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
         return None;
     }
     let node = &network.nodes()[at as usize];
-    let choice = |name: &str| node.values.get(name).and_then(Value::choice);
+    let choice = |name: &str| node.values().get(name).and_then(Value::choice);
     let wrap = |name: &str| match choice(name) {
         Some("clamp") => Wrap::Clamp,
         Some("mirror") => Wrap::Mirror,
@@ -114,15 +114,18 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
             gltf_placement(network, at, kind.ends_with("colorimage")),
         ),
     };
-    let factor = match (node_kind.ends_with("colorimage"), node.values.get("factor")) {
-        (true, _) => four(node.values.get("color")),
+    let factor = match (
+        node_kind.ends_with("colorimage"),
+        node.values().get("factor"),
+    ) {
+        (true, _) => four(node.values().get("color")),
         (false, Some(Value::Number(f))) => [*f as f32, *f as f32, *f as f32, 1.0],
         (false, factor) => four(factor),
     };
     let vertex = driver(network, at, "geomcolor").is_some();
     Some(Sampled {
-        source: node.images.get("file").cloned(),
-        image: node.textures.get("file").map(|id| id.prim()),
+        source: node.images().get("file").cloned(),
+        image: node.textures().get("file").map(|id| id.prim()),
         uv,
         transform: transform.map(|row| row.map(|v| v as f32)),
         wrap: [wrap("uaddressmode"), wrap("vaddressmode")],
@@ -224,7 +227,7 @@ fn affine(network: &MaterialNetwork, at: u32) -> Option<(Affine, Arc<str>)> {
         }
         "geompropvalue" => {
             let name = network.nodes()[at as usize]
-                .values
+                .values()
                 .get("geomprop")?
                 .text()?;
             Some((IDENTITY, Arc::from(name)))

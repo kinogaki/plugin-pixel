@@ -491,9 +491,7 @@ fn textured(texture: PrimId) -> Prim {
     built.link(t, "out", s, "color").unwrap();
     let mut network = built.build(s).unwrap();
     // What the host does as it sends it: the image's Texture prim.
-    network.nodes_mut()[t as usize]
-        .textures
-        .insert("file".to_owned(), Id::of(texture));
+    network.set_texture(t, "file", Id::of(texture)).unwrap();
     Prim::Material(Material {
         network: Arc::new(network),
         path: Arc::from("/m"),
@@ -610,9 +608,7 @@ fn gltf_material() -> Prim {
     built.link(vertex, "out", image, "geomcolor").unwrap();
     built.link(image, "outcolor", s, "color").unwrap();
     let mut network = built.build(s).unwrap();
-    network.nodes_mut()[image as usize]
-        .textures
-        .insert("file".to_owned(), Id::of(id(2)));
+    network.set_texture(image, "file", Id::of(id(2))).unwrap();
     Prim::Material(Material {
         network: Arc::new(network),
         path: Arc::from("/m"),

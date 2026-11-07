@@ -185,8 +185,8 @@ fn a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none() {
     let mine = of(surface(), &[("color", color.clone())]);
     let standard = Rules.standard(&mine).unwrap();
     let shown = &standard.nodes()[standard.surface().unwrap() as usize];
-    assert_eq!(shown.def.mtlx().unwrap().node, "open_pbr_surface");
-    assert_eq!(shown.values["base_color"], color);
+    assert_eq!(shown.def().mtlx().unwrap().node, "open_pbr_surface");
+    assert_eq!(shown.values()["base_color"], color);
     assert!(Rules.standard(&of(volume(), &[])).is_none());
 }
 
@@ -317,6 +317,6 @@ fn a_textured_surface_is_an_openpbr_surface_of_its_texture() {
     let surface = standard.surface().unwrap();
     let fed = (standard.links().iter()).find(|l| l.to == surface && &*l.input == "base_color");
     let from = &standard.nodes()[fed.expect("its texture").from as usize];
-    assert_eq!(from.def.mtlx().unwrap().node, "image");
-    assert_eq!(from.images["file"].name(), "/t/brick.png");
+    assert_eq!(from.def().mtlx().unwrap().node, "image");
+    assert_eq!(from.images()["file"].name(), "/t/brick.png");
 }

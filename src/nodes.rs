@@ -312,8 +312,12 @@ pub fn material(network: &MaterialNetwork) -> Material {
         return Material::default();
     };
     let node = &network.nodes()[at as usize];
-    let v = Values(&node.values);
-    if let Some(unlit) = node.def.mtlx().filter(|d| UNLIT.contains(&d.node.as_str())) {
+    let v = Values(node.values());
+    if let Some(unlit) = node
+        .def()
+        .mtlx()
+        .filter(|d| UNLIT.contains(&d.node.as_str()))
+    {
         let emission = v.number("emission", 1.0).max(0.0);
         let surface = Surface {
             color: v.color("emission_color", [1.0; 3]).map(|c| c * emission),
@@ -328,9 +332,9 @@ pub fn material(network: &MaterialNetwork) -> Material {
         look.cutout = (masks && look.texture.is_some()).then(|| v.number("alpha_cutoff", 0.5));
         return Material::Surface(surface, look);
     }
-    if node.def.id == VOLUME {
+    if node.def().id == VOLUME {
         let offset = node
-            .values
+            .values()
             .get("noise_offset")
             .and_then(Value::numbers)
             .unwrap_or(&[]);
@@ -348,16 +352,16 @@ pub fn material(network: &MaterialNetwork) -> Material {
             noise_seed: v.integer("noise_seed", 0).clamp(0, i64::from(u32::MAX)) as u32,
             edge_falloff: v.number("edge_falloff", 0.0).max(0.0),
             shadows: node
-                .values
+                .values()
                 .get("shadows")
                 .and_then(Value::bool)
                 .unwrap_or(false),
         });
     }
-    if node.def.id != SURFACE {
+    if node.def().id != SURFACE {
         return Material::default();
     }
-    let attribute = (node.values.get("attribute").and_then(Value::text))
+    let attribute = (node.values().get("attribute").and_then(Value::text))
         .map(str::trim)
         .filter(|a| !a.is_empty())
         .map(Arc::from);
@@ -382,10 +386,10 @@ fn read(network: &MaterialNetwork, at: NodeIndex, input: &str) -> Look {
         return Look::default();
     };
     let node = &network.nodes()[from as usize];
-    let attribute = match node.def.mtlx().map(|d| d.node.as_str()) {
+    let attribute = match node.def().mtlx().map(|d| d.node.as_str()) {
         Some("geomcolor") => Some(Arc::from(names::CD)),
         Some("geompropvalue") => node
-            .values
+            .values()
             .get("geomprop")
             .and_then(Value::text)
             .map(Arc::from),
@@ -417,8 +421,8 @@ fn copied(
         return Some(there);
     }
     let node = &from.nodes()[at as usize];
-    let there = built.node(&node.def, &node.values).ok()?;
-    for (input, image) in &node.images {
+    let there = built.node(node.def(), node.values()).ok()?;
+    for (input, image) in node.images() {
         built.image(there, input, image.clone()).ok()?;
     }
     made.insert(at, there);
@@ -513,8 +517,8 @@ impl MaterialRules for Rules {
     fn translate(&self, standard: &MaterialNetwork) -> Option<MaterialNetwork> {
         let at = standard.surface()?;
         let shown = &standard.nodes()[at as usize];
-        let number = |name: &str| shown.values.get(name).and_then(Value::number);
-        let color = |name: &str| shown.values.get(name).and_then(Value::color);
+        let number = |name: &str| shown.values().get(name).and_then(Value::number);
+        let color = |name: &str| shown.values().get(name).and_then(Value::color);
         if number("base_weight") == Some(0.0) && number("specular_weight") == Some(0.0) {
             let values = [
                 ("emission", Value::Number(number("emission_luminance")?)),
@@ -529,9 +533,9 @@ impl MaterialRules for Rules {
         let base = driver(standard, at, "base_color");
         let read = base.and_then(|b| {
             let node = &standard.nodes()[b as usize];
-            match node.def.mtlx()?.node.as_str() {
+            match node.def().mtlx()?.node.as_str() {
                 "geomcolor" => Some("Cd"),
-                "geompropvalue" => node.values.get("geomprop")?.text(),
+                "geompropvalue" => node.values().get("geomprop")?.text(),
                 _ => None,
             }
         });
@@ -547,9 +551,9 @@ impl MaterialRules for Rules {
         // glTF's mask: the opacity a cutoff compares the alpha with.
         let cutoff = driver(standard, at, "geometry_opacity").and_then(|o| {
             let node = &standard.nodes()[o as usize];
-            let compares = node.def.mtlx()?.node == "ifgreatereq";
+            let compares = node.def().mtlx()?.node == "ifgreatereq";
             let alpha = driver(standard, o, "value1").is_some();
-            (compares && alpha).then(|| node.values.get("value2")?.number())?
+            (compares && alpha).then(|| node.values().get("value2")?.number())?
         });
         if let (Some(cutoff), Some(_)) = (cutoff, textured) {
             values.insert("cutout".to_owned(), Value::Number(cutoff));
@@ -566,7 +570,7 @@ impl MaterialRules for Rules {
 /// The output of texture node `at` that gives its color: `outcolor` of a
 /// glTF color image, else `out`.
 fn output(network: &MaterialNetwork, at: NodeIndex) -> &'static str {
-    let def = network.nodes()[at as usize].def.mtlx();
+    let def = network.nodes()[at as usize].def().mtlx();
     match def.is_some_and(|d| d.node.ends_with("colorimage")) {
         true => "outcolor",
         false => "out",
