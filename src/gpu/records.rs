@@ -1,6 +1,6 @@
 //! What the passes read, as the shaders lay it out: the G-buffer's vertices,
-//! the instances, the lights, the volumes and the
-//! per-frame uniform. Each packs from the renderer's scene.
+//! the cut-out triangles' corners rays read, the instances, the lights, the
+//! volumes and the per-frame uniform. Each packs from the renderer's scene.
 //!
 //! Each light kind lights a white Lambert surface as the direct pass reads it:
 //! - **area** (rect, disk): a point emitter at its centre, power radiance ×
@@ -12,6 +12,7 @@
 //!   radiance × π r² (normalized: over its area 4π r²), falling off as 1 /
 //!   max(d², r²), times the cone's falloff.
 use super::atlas::Atlas;
+use super::meshes::Span;
 use crate::render::camera::CameraFrame;
 use crate::render::settings::{MAX_LEVELS, Settings};
 use crate::render::vector::V3;
@@ -35,6 +36,20 @@ pub struct Vertex {
     pub uv: [f32; 2],
 }
 
+/// A traced triangle of a mesh its material cuts out, as rays test it
+/// (`Cut` in bvh.wgsl): what the G-buffer reads at its corners, in the
+/// traced triangle's order.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct Cut {
+    /// Each corner's first texture coordinate.
+    pub s: [f32; 3],
+    /// Each corner's second.
+    pub t: [f32; 3],
+    /// Each corner's alpha (its tint's).
+    pub alpha: [f32; 3],
+}
+
 /// An instance as the passes read it (`Instance` in common.wgsl): its
 /// placement both ways, its material and ids.
 #[repr(C)]
@@ -50,7 +65,8 @@ pub struct GpuInstance {
     /// rgb: what it lets through.
     pub transmit: [f32; 4],
     /// x: the object id; y: its mesh's BVH root node; z: what of `tint`
-    /// stands for its corners' ([`OWN_COLOR`], [`OWN_ALPHA`]).
+    /// stands for its corners' ([`OWN_COLOR`], [`OWN_ALPHA`]); w: its
+    /// mesh's cut records' offset ([`Span::cuts`]).
     pub id: [u32; 4],
     /// Its texture's picture in the atlas: x, y its corner; z its width and
     /// height (16 bits each); w the flags ([`TEXTURED`], [`NEAREST`], each
@@ -84,15 +100,15 @@ pub const WRAP_T: u32 = 4;
 pub const CUTOUT: u32 = 64;
 
 impl GpuInstance {
-    /// `instance` packed, its mesh's BVH rooted at node `root`, shading as
-    /// `surface` (its picture placed in `atlas`).
-    pub fn of(instance: &Instance, root: u32, surface: Surface, atlas: &Atlas) -> GpuInstance {
+    /// `instance` packed, its mesh lying at `span`, shading as `surface`
+    /// (its picture placed in `atlas`).
+    pub fn of(instance: &Instance, span: &Span, surface: Surface, atlas: &Atlas) -> GpuInstance {
         let own = u32::from(instance.tint.is_some()) * OWN_COLOR
             + u32::from(instance.alpha.is_some()) * OWN_ALPHA;
         let mut packed = GpuInstance {
             to_world: instance.to_world,
             to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
-            id: [instance.id, root, own, 0],
+            id: [instance.id, span.root, own, span.cuts],
             tint: V3::of(instance.tint.unwrap_or_default()).with_w(instance.alpha.unwrap_or(1.0)),
             ..GpuInstance::default()
         };

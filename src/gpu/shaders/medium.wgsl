@@ -1,5 +1,6 @@
-// Volumes (gpu/records.rs packs them): their bounds' BVH and records at
-// group 1, bindings 3 to 5, where a ray crosses them, their density, Henyey–Greenstein's phase, lit fog's
+// Volumes (gpu/records.rs packs them): their bounds' BVH and records (a
+// uniform of MAX_VOLUMES) at group 1, bindings 3 to 5, where a ray crosses
+// them, their density, Henyey–Greenstein's phase, lit fog's
 // density, and the transmittance a shadow ray keeps through the volumes
 // that cast shadows. Comes after bvh.wgsl.
 
@@ -26,7 +27,7 @@ struct Medium {
 
 @group(1) @binding(3) var<storage, read> medium_nodes: array<Node>;
 @group(1) @binding(4) var<storage, read> medium_triangles: array<Triangle>;
-@group(1) @binding(5) var<storage, read> media: array<Medium>;
+@group(1) @binding(5) var<uniform> media: array<Medium, MAX_VOLUMES>;
 
 // The crossings a ray keeps (the nearest; parity counts them all).
 const MAX_CROSSINGS: u32 = 16u;
@@ -70,7 +71,7 @@ fn crossings(o: vec3<f32>, d: vec3<f32>) -> Crossings {
         }
         for (var k = n.a; k < n.a + n.count; k++) {
             let tri = medium_triangles[k];
-            let t = triangle_distance(tri, r);
+            let t = crossing(tri, r).x;
             if t <= 0.0 {
                 continue;
             }

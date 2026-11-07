@@ -18,7 +18,8 @@
 //!   each corner's tint (vertex, point, primitive or detail values; white
 //!   where a shape lacks it), and a glTF color image's vertex alpha (the
 //!   mesh's `Alpha`; opaque where it lacks it) what the corner multiplies
-//!   the texture's alpha by; `N` its shading normals.
+//!   the texture's alpha by; `N` its shading normals. A mesh whose material
+//!   has a cutout is cut out: rays read its corners' coordinates and alpha.
 //! - **Materials** become surfaces and media ([`nodes::material`]); a
 //!   surface's texture samples the picture its Texture prim holds (linear
 //!   ACEScg, made straight where the host premultiplied it, its longer side
@@ -29,10 +30,10 @@
 //!   first visible fog is the fog.
 //!
 //! A material's new colors rewrite the instances' surfaces alone; a new
-//! kind of material, or a new color attribute, makes again the meshes of
-//! the shapes it colors, a material coming or going places the instances
-//! again; lights and cameras never touch geometry. A hidden shape keeps
-//! what it made.
+//! kind of material, a new color attribute, or a cutout set or cleared,
+//! makes again the meshes of the shapes it colors, a material coming or
+//! going places the instances again; lights and cameras never touch
+//! geometry. A hidden shape keeps what it made.
 //!
 //! What it can't render as sent it says ([`Sync::problems`]): volumes past
 //! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
@@ -206,9 +207,10 @@ impl Sync {
     }
 
     /// The materials again, and the pictures their textures sample: the
-    /// Material prims whose meshes are made again (their kind, tint, alpha
-    /// or coordinates changed, or they came or went), and whether any moved
-    /// to another index (the instances are placed again).
+    /// Material prims whose meshes are made again (their kind, tint, alpha,
+    /// coordinates or whether they cut out changed, or they came or went),
+    /// and whether any moved to another index (the instances are placed
+    /// again).
     fn read_materials(&mut self) -> (BTreeSet<PrimId>, bool) {
         let before = std::mem::take(&mut self.materials);
         let mut surfaces = Vec::new();
@@ -268,12 +270,13 @@ impl Sync {
         self.scene.surfaces = surfaces;
         self.scene.pictures = pictures;
         // What meshes take of a material: whether it is a volume, else its
-        // tint, alpha and coordinates.
+        // tint, alpha, coordinates and whether it cuts out.
         let meshes_of = |m: Option<&(Material, u32)>| {
             m.map(|(material, _)| match material {
                 Material::Surface(_, look) => {
                     let uv = look.texture.as_ref().map(|t| t.uv.clone());
-                    Some((look.tint().cloned(), look.alpha().cloned(), uv))
+                    let cut_out = look.cutout.is_some();
+                    Some((look.tint().cloned(), look.alpha().cloned(), uv, cut_out))
                 }
                 Material::Volume(_) => None,
             })
@@ -489,7 +492,10 @@ impl Sync {
                         tints: tints(shape, triangles, look).map(|t| of(&ts, &t)),
                         uvs: uvs.as_deref().map(|uv| of(&ts, uv)),
                     };
-                    let mesh = Mesh::new(points.as_slice(), &group, held);
+                    let mesh = Mesh {
+                        cut_out: look.cutout.is_some(),
+                        ..Mesh::new(points.as_slice(), &group, held)
+                    };
                     made.meshes.push((material, Arc::new(mesh)));
                 }
             }

@@ -125,6 +125,35 @@ pub fn unlit(color: [f64; 3]) -> Prim {
     })
 }
 
+/// Surface Unlit Cutout of a glTF color image holding `values` (its
+/// nearest texel), reading Texture prim `texture`, cut out at alpha 0.5.
+pub fn unlit_cutout(texture: PrimId, values: &[(&str, Value)]) -> MaterialNetwork {
+    use kinogaki_render_api::geometry::image::ImageSource;
+    use kinogaki_render_api::material::mtlx::def;
+    let mut built = MaterialNetwork::builder();
+    let held = [("alpha_mode".to_owned(), Value::Integer(1))].into();
+    let s = built
+        .node(&def("ND_kinogaki_surface_unlit").unwrap(), &held)
+        .unwrap();
+    let values: Parameters = (values.iter())
+        .map(|(n, v)| ((*n).to_owned(), v.clone()))
+        .chain([("filtertype".to_owned(), Value::Choice("closest".into()))])
+        .collect();
+    let t = built
+        .node(&def("ND_kinogaki_gltf_colorimage").unwrap(), &values)
+        .unwrap();
+    built
+        .image(t, "file", ImageSource::path("/t/picture.png"))
+        .unwrap();
+    built.link(t, "outcolor", s, "emission_color").unwrap();
+    built.link(t, "outa", s, "opacity").unwrap();
+    let mut network = built.build(s).unwrap();
+    network.nodes_mut()[t as usize]
+        .textures
+        .insert("file".into(), Id::of(texture));
+    network
+}
+
 /// The scene's prims: materials 0 and 1, the floor 2, the box 3, a sun 4
 /// and a sky 5.
 pub fn scene() -> SceneUpdate {

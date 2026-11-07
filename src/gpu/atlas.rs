@@ -1,7 +1,8 @@
 //! The pictures surfaces sample, packed side by side into one texture the
-//! G-buffer reads texels from (half floats, rgba): shelves of pictures,
-//! tallest first, at most [`SIDE`] texels a side. Pictures that don't fit
-//! are halved, the largest first, until they do.
+//! G-buffer and the rays read texels from (half floats, rgba): shelves of
+//! pictures, tallest first, 2048 texels wide (or as wide as the widest
+//! picture) and at most [`SIDE`] tall. Pictures that don't fit are halved,
+//! the largest first, until they do: four of 2048 × 2048 fit.
 use crate::render::Picture;
 use std::sync::Arc;
 

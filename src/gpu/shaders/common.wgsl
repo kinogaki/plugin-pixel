@@ -65,7 +65,9 @@ struct Instance {
     // it is unlit (its color whatever lights it).
     transmit: vec4<f32>,
     // x: the object id; y: its mesh's BVH root node; z: what of `tint`
-    // stands for its corners' (1 its color, 2 its alpha).
+    // stands for its corners' (1 its color, 2 its alpha); w: how far its
+    // mesh's cut records lie before its traced triangles (bvh.wgsl's `cuts`:
+    // traced triangle k's is k − w), when its material cuts it out.
     id: vec4<u32>,
     // Its texture's picture in the atlas: x, y its corner; z its width and
     // height (16 bits each); w the flags (records.rs: 1 textured, 2 the

@@ -1,15 +1,11 @@
 // The G-buffer pass: rasterizes the instances (each mesh drawn once for all
-// its instances, in its own space, placed by each) at film resolution into albedo
-// (the material's color × the vertex tint, its color attribute: blended
-// across a triangle, flat where the tint is a primitive's, or its instance's
-// own color, × its texture:
-// the picture at the transformed coordinates, its nearest texel or four
-// blended, each axis wrapped, × its factor; where the texture's alpha × the
-// vertex alpha is below a cutout, nothing), normal (world, facing the camera), depth (along
-// the view direction), object id and the material's transmittance (light
-// through its back face; w: 1 when unlit).
-
-@group(0) @binding(1) var atlas: texture_2d<f32>;
+// its instances, in its own space, placed by each) at film resolution into
+// albedo (the surface at the fragment, surface.wgsl: the material's color
+// × the vertex tint, its color attribute: blended across a triangle, flat
+// where the tint is a primitive's, or its instance's own color, × its
+// texture; where its cutout cuts it away, nothing), normal (world, facing
+// the camera), depth (along the view direction), object id and the
+// material's transmittance (light through its back face; w: 1 when unlit).
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -52,64 +48,6 @@ fn vs(v: VertexIn) -> VertexOut {
     return out;
 }
 
-// Texel `i` of `n` along an axis wrapped by `mode` (0 repeat, 1 clamp, 2
-// mirror, 3 black: -1 outside).
-fn wrapped(i: i32, n: i32, mode: u32) -> i32 {
-    switch mode {
-        case 1u: {
-            return clamp(i, 0, n - 1);
-        }
-        case 2u: {
-            let m = ((i % (2 * n)) + 2 * n) % (2 * n);
-            return select(m, 2 * n - 1 - m, m >= n);
-        }
-        case 3u: {
-            return select(i, -1, i < 0 || i >= n);
-        }
-        default: {
-            return ((i % n) + n) % n;
-        }
-    }
-}
-
-// Texel `(x, y)` of `object`'s picture, wrapped (rows from the top).
-fn texel(object: Instance, size: vec2<i32>, x: i32, y: i32) -> vec4<f32> {
-    let flags = object.texture.w;
-    let wx = wrapped(x, size.x, (flags >> 2u) & 3u);
-    let wy = wrapped(y, size.y, (flags >> 4u) & 3u);
-    if wx < 0 || wy < 0 {
-        return vec4<f32>(0.0);
-    }
-    let corner = vec2<i32>(object.texture.xy);
-    return textureLoad(atlas, corner + vec2<i32>(wx, wy), 0);
-}
-
-// `object`'s texture at corner coordinates `uv` (MaterialX's, v up), × its
-// factor; white without one.
-fn textured(object: Instance, uv: vec2<f32>) -> vec4<f32> {
-    let flags = object.texture.w;
-    if (flags & 1u) == 0u {
-        return vec4<f32>(1.0);
-    }
-    let size = vec2<i32>(i32(object.texture.z & 0xffffu), i32(object.texture.z >> 16u));
-    let st = vec2<f32>(dot(object.uv_s.xyz, vec3<f32>(uv, 1.0)), dot(object.uv_t.xyz, vec3<f32>(uv, 1.0)));
-    // The picture's rows run down from its top.
-    let p = vec2<f32>(st.x, 1.0 - st.y) * vec2<f32>(size);
-    var color: vec4<f32>;
-    if (flags & 2u) != 0u {
-        let at = vec2<i32>(floor(p));
-        color = texel(object, size, at.x, at.y);
-    } else {
-        let q = p - 0.5;
-        let f = fract(q);
-        let at = vec2<i32>(floor(q));
-        let top = mix(texel(object, size, at.x, at.y), texel(object, size, at.x + 1, at.y), f.x);
-        let bottom = mix(texel(object, size, at.x, at.y + 1), texel(object, size, at.x + 1, at.y + 1), f.x);
-        color = mix(top, bottom, f.y);
-    }
-    return color * object.factor;
-}
-
 @fragment
 fn fs(v: VertexOut) -> Targets {
     let object = instances[v.instance];
@@ -120,13 +58,12 @@ fn fs(v: VertexOut) -> Targets {
     if dot(n, to_eye) < 0.0 {
         n = -n;
     }
-    let picture = textured(object, v.uv);
-    let tint = tinted(object, v.tint);
-    if (object.texture.w & 64u) != 0u && picture.a * tint.a < object.uv_s.w {
+    let seen = surface_at(object, v.uv, v.tint);
+    if cut_away(object, seen.a) {
         discard;
     }
     var out: Targets;
-    out.albedo = vec4<f32>(object.albedo.rgb * tint.rgb * picture.rgb, 1.0);
+    out.albedo = vec4<f32>(seen.rgb, 1.0);
     out.normal = vec4<f32>(n, 0.0);
     out.depth = dot(v.world - frame.eye.xyz, -frame.back.xyz);
     out.id = object.id.x;

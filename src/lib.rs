@@ -7,9 +7,9 @@
 //! film pixel repeated over its block of the view. Inputs and outputs are
 //! linear ACEScg.
 //!
-//! The renderer knows no SDK: [`render`] (the scene in world space, film,
-//! camera, BVH, dither, the emitters' colors) and [`gpu`] (the passes and
-//! their shaders). The plugin around it: the package, the engine's
+//! The renderer knows no SDK: [`render`] (the scene, meshes in their own
+//! space placed by instances and the rest in world space; film, camera, the
+//! two levels of BVH, dither) and [`gpu`] (the passes and their shaders). The plugin around it: the package, the engine's
 //! [`description`] and [`settings`], its material [`nodes`] and starting
 //! materials ([`presets`]), its [`lights`] and fog, its [`outputs`], scene
 //! [`sync`] with the [`pictures`] textures become, and the render thread

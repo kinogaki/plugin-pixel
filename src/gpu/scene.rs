@@ -1,18 +1,19 @@
 //! The scene on the GPU, in two levels: the meshes in their own space (the
 //! G-buffer's vertices and triangles, and each mesh's BVH) and the instances
 //! placing them (their records and the top-level BVH over them). The scene
-//! group every pass binds as group 1: the meshes' nodes and triangles, the
-//! top level's nodes, the volumes' BVH (nodes, triangles, records), the
-//! instances and the lights; beside it, the atlas of the pictures surfaces
-//! sample, which the G-buffer reads. Each part is replaced only when its
-//! source changes: a camera move touches none of it, an object's move the
-//! instances alone, a deform its mesh's runs of the meshes' buffers alone
-//! ([`Meshes`]). What changed is made and checked against the device
-//! ([`Budget`]) before any of it replaces what the GPU holds.
+//! group the G-buffer and the passes tracing rays bind as group 1: the
+//! meshes' nodes and triangles, the top level's nodes, the volumes' BVH
+//! (nodes, triangles, records), the instances, the lights, the cut-out
+//! meshes' cut records and the atlas of the pictures surfaces sample. Each
+//! part is replaced only when its source changes: a camera move touches none
+//! of it, an object's move the instances alone, a deform its mesh's runs of
+//! the meshes' buffers alone ([`Meshes`]). What changed is made and checked
+//! against the device ([`Budget`]) before any of it replaces what the GPU
+//! holds.
 use super::Changed;
 use super::atlas::Atlas;
 use super::budget::{Budget, Part};
-use super::kernel::{bind_group, storage};
+use super::kernel::{bind_group, storage, uniform};
 use super::meshes::{Meshes, Span};
 use super::records::{GpuInstance, GpuLight, GpuMedium, Vertex};
 use crate::render::bvh::{Bvh, Tlas};
@@ -59,7 +60,7 @@ impl Instances {
             .map(|i| {
                 GpuInstance::of(
                     i,
-                    meshes.meshes[i.mesh as usize].root,
+                    &meshes.meshes[i.mesh as usize],
                     surface(surfaces, i.surface),
                     atlas,
                 )
@@ -152,7 +153,8 @@ fn world_bounds(rows: &[[f32; 4]; 3], (lo, hi): ([f32; 3], [f32; 3])) -> ([f32; 
 /// The volumes ready for the GPU: their records and their bounds' BVH, each
 /// stored triangle carrying its volume's index (in `v0.w`, as bits).
 pub struct Media {
-    /// One record a volume (one zeroed when there are none).
+    /// One record a volume, then zeroed ones: [`MAX_VOLUMES`] records, the
+    /// uniform the passes read.
     pub records: Vec<GpuMedium>,
     /// Their bounds' triangles.
     pub bvh: Bvh,
@@ -181,9 +183,7 @@ impl Media {
         let mut records: Vec<GpuMedium> = volumes.iter().map(GpuMedium::of).collect();
         let casters = records.iter().filter(|r| r.flags[2] == 1).count() as u32;
         let counts = (records.len() as u32, casters);
-        if records.is_empty() {
-            records.push(GpuMedium::default());
-        }
+        records.resize(MAX_VOLUMES, GpuMedium::default());
         Media {
             records,
             bvh,
@@ -191,10 +191,9 @@ impl Media {
         }
     }
 
-    /// What they put on the device.
-    fn parts(&self) -> [Part; 3] {
+    /// What they put on the device beside their uniform.
+    fn parts(&self) -> [Part; 2] {
         [
-            Part::of("its volumes", &self.records, true),
             Part::of("its volumes' nodes", &self.bvh.nodes, true),
             Part::of("its volumes' triangles", &self.bvh.triangles, true),
         ]
@@ -233,12 +232,15 @@ fn buffer<T: bytemuck::Pod + Default>(
 }
 
 const STORAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE.union(COPY);
+const UNIFORM: wgpu::BufferUsages = wgpu::BufferUsages::UNIFORM.union(COPY);
 const VERTEX: wgpu::BufferUsages = wgpu::BufferUsages::VERTEX.union(COPY);
 const INDEX: wgpu::BufferUsages = wgpu::BufferUsages::INDEX.union(COPY);
 /// Every buffer takes writes in place.
 const COPY: wgpu::BufferUsages = wgpu::BufferUsages::COPY_DST;
 
-/// The scene group's bindings.
+/// The scene group's bindings: its buffers (storage, but the volumes'
+/// records: a uniform, which leaves the passes within wgpu's default 8
+/// storage buffers), then the atlas.
 const NODES: usize = 0;
 const TRIANGLES: usize = 1;
 const TOP: usize = 2;
@@ -247,6 +249,8 @@ const MEDIUM_TRIANGLES: usize = 4;
 const MEDIA: usize = 5;
 const INSTANCES: usize = 6;
 const LIGHTS: usize = 7;
+const CUTS: usize = 8;
+const BUFFERS: usize = 9;
 
 /// The scene's buffers and its group.
 pub struct GpuScene {
@@ -261,15 +265,15 @@ pub struct GpuScene {
     /// The scene group.
     pub group: wgpu::BindGroup,
     /// Its buffers in binding order.
-    buffers: [wgpu::Buffer; 8],
+    buffers: [wgpu::Buffer; BUFFERS],
     /// The meshes the buffers hold.
     meshes: Meshes,
     /// The instances the buffers hold.
     pub instances: Instances,
     /// The pictures packed, as the atlas holds them.
     atlas: (Vec<Arc<Picture>>, Atlas),
-    /// The atlas the G-buffer reads texels from.
-    pub texels: wgpu::TextureView,
+    /// The atlas surfaces read texels from.
+    texels: wgpu::TextureView,
     /// Volumes rendered, and how many cast shadows.
     pub volumes: (u32, u32),
     /// Lights in the light buffer.
@@ -282,23 +286,42 @@ impl GpuScene {
     /// The buffers of an empty scene.
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> GpuScene {
         let stages = wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT;
-        let entries: Vec<_> = (0..8).map(|b| storage(b, stages)).collect();
+        let atlas = wgpu::BindGroupLayoutEntry {
+            binding: BUFFERS as u32,
+            visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let entries: Vec<_> = (0..BUFFERS)
+            .map(|b| match b {
+                MEDIA => uniform(b as u32, stages),
+                _ => storage(b as u32, stages),
+            })
+            .chain([atlas])
+            .collect();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pixel scene"),
             entries: &entries,
         });
-        let buffers: [wgpu::Buffer; 8] =
-            std::array::from_fn(|_| buffer::<[u32; 4]>(device, "pixel empty", &[], STORAGE));
+        let buffers: [wgpu::Buffer; BUFFERS] = std::array::from_fn(|b| {
+            let usage = if b == MEDIA { UNIFORM } else { STORAGE };
+            buffer::<[u32; 4]>(device, "pixel empty", &[], usage)
+        });
         let meshes = Meshes::build(&[]);
         let atlas = Atlas::pack(&[]);
         let instances = Instances::build(&[], (&meshes, &[]), &[], &atlas);
+        let texels = texels(device, queue, &atlas);
         let mut made = GpuScene {
-            texels: texels(device, queue, &atlas),
+            group: Self::bind(device, &layout, &buffers, &texels),
+            texels,
             atlas: (Vec::new(), atlas),
             vertices: buffer::<Vertex>(device, "pixel vertices", &[], VERTEX),
             indices: buffer::<u32>(device, "pixel indices", &[], INDEX),
             drawn: buffer::<u32>(device, "pixel drawn", &[], VERTEX),
-            group: Self::bind(device, &layout, &buffers),
             layout,
             buffers,
             meshes,
@@ -361,12 +384,13 @@ impl GpuScene {
             self.lay_out(device);
             self.layouts += 1;
         } else if let Some(Some(written)) = written {
-            let [vertices, indices, nodes, triangles] = &written;
+            let [vertices, indices, nodes, triangles, cuts] = &written;
             let m = &self.meshes;
             write(queue, &self.vertices, &m.vertices, vertices);
             write(queue, &self.indices, &m.indices, indices);
             write(queue, &self.buffers[NODES], &m.nodes, nodes);
             write(queue, &self.buffers[TRIANGLES], &m.triangles, triangles);
+            write(queue, &self.buffers[CUTS], &m.cuts, cuts);
         }
         if let Some(i) = instances {
             self.drawn = buffer(device, "pixel drawn", &i.drawn, VERTEX);
@@ -387,7 +411,7 @@ impl GpuScene {
                 &media.bvh.triangles,
                 STORAGE,
             );
-            self.buffers[MEDIA] = buffer(device, "pixel media", &media.records, STORAGE);
+            self.buffers[MEDIA] = buffer(device, "pixel media", &media.records, UNIFORM);
             self.volumes = media.counts;
         }
         if let Some(lights) = lights {
@@ -395,7 +419,7 @@ impl GpuScene {
             self.lights = lights.len() as u32;
         }
         if changed.any() {
-            self.group = Self::bind(device, &self.layout, &self.buffers);
+            self.group = Self::bind(device, &self.layout, &self.buffers, &self.texels);
         }
         Ok(())
     }
@@ -407,6 +431,7 @@ impl GpuScene {
         self.indices = buffer(device, "pixel indices", &m.indices, INDEX);
         self.buffers[NODES] = buffer(device, "pixel nodes", &m.nodes, STORAGE);
         self.buffers[TRIANGLES] = buffer(device, "pixel triangles", &m.triangles, STORAGE);
+        self.buffers[CUTS] = buffer(device, "pixel cuts", &m.cuts, STORAGE);
     }
 
     /// The bounds of what is drawn (none when nothing is).
@@ -423,11 +448,12 @@ impl GpuScene {
     fn bind(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        buffers: &[wgpu::Buffer; 8],
+        buffers: &[wgpu::Buffer; BUFFERS],
+        texels: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
-        let all: Vec<_> = buffers
-            .iter()
+        let all: Vec<_> = (buffers.iter())
             .map(wgpu::Buffer::as_entire_binding)
+            .chain([wgpu::BindingResource::TextureView(texels)])
             .collect();
         bind_group(device, "pixel scene", layout, &all)
     }
@@ -542,6 +568,34 @@ mod tests {
         assert_eq!(own(None, Some(0.25)), (OWN_ALPHA, [0.0, 0.0, 0.0, 0.25]));
     }
 
+    /// A cut-out mesh's traced triangles keep what the G-buffer reads at
+    /// their corners, in their order, where its span says; another mesh
+    /// keeps none.
+    #[test]
+    fn a_cut_out_meshs_traced_triangles_keep_their_corners() {
+        let (points, triangles) = square(1.0);
+        let held = crate::render::Corners {
+            tints: Some((0..6).map(|c| [1.0, 1.0, 1.0, c as f32 / 10.0]).collect()),
+            uvs: Some((0..6).map(|c| [c as f32, 10.0 + c as f32]).collect()),
+            ..Default::default()
+        };
+        let cut = Mesh {
+            cut_out: true,
+            ..Mesh::new(&points, &triangles, held)
+        };
+        let m = Meshes::build(&[Arc::new(quad(0.0)), Arc::new(cut.clone())]);
+        assert_eq!(m.cuts.len(), 2, "the second mesh's alone");
+        let span = &m.meshes[1];
+        assert_eq!((m.meshes[0].cuts, span.cuts), (0, 2));
+        for (k, &t) in cut.bvh.order.iter().enumerate() {
+            let record = m.cuts[k + 2 - span.cuts as usize];
+            let corner = |c: usize| (t as usize * 3 + c) as f32;
+            assert_eq!(record.s, [0, 1, 2].map(corner));
+            assert_eq!(record.t, [0, 1, 2].map(|c| 10.0 + corner(c)));
+            assert_eq!(record.alpha, [0, 1, 2].map(|c| corner(c) / 10.0));
+        }
+    }
+
     /// A mesh made again that fits its runs is written there, those runs
     /// alone said written; a mesh outgrowing them, or another count of
     /// meshes, is laid out again.
@@ -613,6 +667,6 @@ mod tests {
             .map(|t| t.v0[3].to_bits())
             .collect();
         assert_eq!(owners.iter().filter(|&&o| o == 1).count(), 2);
-        assert_eq!(Media::build(&[]).records.len(), 1);
+        assert_eq!(Media::build(&[]).records.len(), MAX_VOLUMES);
     }
 }

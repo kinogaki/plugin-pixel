@@ -10,7 +10,8 @@ use super::vector::V3;
 pub struct Mesh {
     /// Each vertex's position.
     pub positions: Vec<[f32; 3]>,
-    /// Each vertex's shading normal: as held, else its triangle's own (flat).
+    /// Each vertex's shading normal: as held, else (none held, or one of no
+    /// direction) its triangle's own (flat).
     pub normals: Vec<[f32; 3]>,
     /// What each vertex's albedo (rgb) and its texture's alpha (a) are
     /// multiplied by: the material's color attribute and glTF's vertex
@@ -23,13 +24,16 @@ pub struct Mesh {
     pub triangles: Vec<[u32; 3]>,
     /// The hierarchy over its triangles.
     pub bvh: Bvh,
+    /// Its material cuts it out where its texture's alpha is low: rays
+    /// read its corners' coordinates and alpha too.
+    pub cut_out: bool,
 }
 
 /// What a mesh holds at each corner beside its position, three corners a
 /// triangle.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Corners {
-    /// Shading normals (none: flat).
+    /// Shading normals (none, or one of no direction: flat).
     pub normals: Option<Vec<[f32; 3]>>,
     /// What the albedo and the texture's alpha are multiplied by (none:
     /// white, opaque).
@@ -41,7 +45,7 @@ pub struct Corners {
 impl Mesh {
     /// The mesh of `triangles` over `points`, what it holds at their corners
     /// kept only where it matches them: corners on one point holding the
-    /// same values share a vertex. Its hierarchy built.
+    /// same values share a vertex. Its hierarchy built; not cut out.
     pub fn new(points: &[[f32; 3]], triangles: &[[u32; 3]], held: Corners) -> Mesh {
         let corners = triangles.len() * 3;
         let normals = held.normals.filter(|c| c.len() == corners);
@@ -54,6 +58,7 @@ impl Mesh {
             uvs: uvs.as_ref().map(|_| Vec::new()),
             triangles: Vec::with_capacity(triangles.len()),
             bvh: Bvh::build(&[]),
+            cut_out: false,
         };
         // The vertices made on each point: the newest, and each one's next.
         let mut newest = vec![u32::MAX; points.len()];
@@ -63,12 +68,16 @@ impl Mesh {
                 let [a, b, c] = triangle.map(|p| V3::of(points[p as usize]));
                 (b - a).cross(c - a).unit_or(V3::ZERO).to_array()
             };
-            let face = normals.is_none().then(flat);
+            // An authored zero (or not finite) normal has no direction to
+            // shade by: the triangle's own stands for it.
+            let directed = |n: &[f32; 3]| V3::of(*n).unit_or(V3::ZERO) != V3::ZERO;
+            let mut face = None;
             let vertices = std::array::from_fn(|k| {
                 let at = t * 3 + k;
+                let held = normals.as_ref().map(|n| n[at]).filter(directed);
                 let corner = Corner {
                     position: points[triangle[k] as usize],
-                    normal: face.unwrap_or_else(|| normals.as_ref().map_or([0.0; 3], |n| n[at])),
+                    normal: held.unwrap_or_else(|| *face.get_or_insert_with(flat)),
                     tint: tints.as_ref().map(|c| c[at]),
                     uv: uvs.as_ref().map(|c| c[at]),
                 };
@@ -197,6 +206,31 @@ mod tests {
             ..Corners::default()
         };
         assert_eq!(Mesh::new(&SQUARE, &HALVES, short).tints, None);
+    }
+
+    #[test]
+    fn a_held_normal_of_no_direction_is_its_triangles_own() {
+        let mut held = vec![[0.0, 0.6, 0.8]; 6];
+        held[1] = [0.0; 3];
+        held[5] = [f32::NAN; 3];
+        let normals = Some(held);
+        let mesh = Mesh::new(
+            &SQUARE,
+            &HALVES,
+            Corners {
+                normals,
+                ..Corners::default()
+            },
+        );
+        let normal = |t: usize, k: usize| mesh.normals[mesh.triangles[t][k] as usize];
+        assert_eq!(
+            (normal(0, 0), normal(1, 1)),
+            ([0.0, 0.6, 0.8], [0.0, 0.6, 0.8])
+        );
+        assert_eq!(
+            (normal(0, 1), normal(1, 2)),
+            ([0.0, 0.0, 1.0], [0.0, 0.0, 1.0])
+        );
     }
 
     #[test]

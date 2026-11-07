@@ -13,7 +13,9 @@
 //!    Shade Ramp × albedo, the volumes over it, flat fog.
 //! 7. **Upscale**: each film pixel a pixel-size block of the view.
 //!
-//! A [`Viewport`] is one view's uniform, film textures and bind groups.
+//! The rays of passes 2 to 5 pass where a cutout cuts a surface away, as
+//! the G-buffer draws nothing there. A [`Viewport`] is one view's uniform,
+//! film textures and bind groups.
 use kinogaki_render_api::display::wgpu;
 mod atlas;
 mod budget;
@@ -80,9 +82,6 @@ pub struct Renderer {
     ambient: crate::render::Ambient,
     rims: crate::render::Rims,
     fog: Option<crate::render::Fog>,
-    /// Counts scene group replacements: a view bound to an older one binds
-    /// again.
-    generation: u64,
     /// The last scene didn't fit: the GPU holds an older one, which the
     /// next replaces whole.
     unfit: bool,
@@ -91,8 +90,7 @@ pub struct Renderer {
 /// One view's frame: its uniform, its film textures and its bind groups.
 pub struct Viewport {
     frame: wgpu::Buffer,
-    targets: Option<Targets>,
-    groups: Option<(u64, Groups)>,
+    targets: Option<(Targets, Groups)>,
 }
 
 impl Renderer {
@@ -108,7 +106,6 @@ impl Renderer {
             ambient: Default::default(),
             rims: Default::default(),
             fog: None,
-            generation: 0,
             unfit: false,
         }
     }
@@ -131,7 +128,6 @@ impl Renderer {
         let set = self.scene.set((&self.device, &self.queue), scene, changed);
         let set = caught.end().and(set);
         self.unfit = set.is_err();
-        self.generation += u64::from(changed.any());
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
         set
     }
@@ -159,7 +155,6 @@ impl Renderer {
                 mapped_at_creation: false,
             }),
             targets: None,
-            groups: None,
         }
     }
 
@@ -178,11 +173,16 @@ impl Renderer {
         if film.is_empty() {
             return None;
         }
-        if viewport.targets.as_ref().is_none_or(|t| t.film != film) {
-            viewport.targets = Some(Targets::new(&self.device, film));
-            viewport.groups = None;
+        if viewport
+            .targets
+            .as_ref()
+            .is_none_or(|(t, _)| t.film != film)
+        {
+            let targets = Targets::new(&self.device, film);
+            let groups = self.passes.bind(&self.device, &viewport.frame, &targets);
+            viewport.targets = Some((targets, groups));
         }
-        let targets = viewport.targets.as_ref()?;
+        let (targets, groups) = viewport.targets.as_ref()?;
         let frame = CameraFrame::new(camera, &film, self.scene.bounds());
         let lighting = Lighting {
             ambient: self.ambient,
@@ -194,16 +194,6 @@ impl Renderer {
         };
         let uniform = Frame::new(&frame, view, settings, &lighting);
         (self.queue).write_buffer(&viewport.frame, 0, bytemuck::bytes_of(&uniform));
-        if viewport
-            .groups
-            .as_ref()
-            .is_none_or(|(g, _)| *g != self.generation)
-        {
-            let frame = (&viewport.frame, &self.scene.texels);
-            let groups = self.passes.bind(&self.device, frame, targets);
-            viewport.groups = Some((self.generation, groups));
-        }
-        let (_, groups) = viewport.groups.as_ref()?;
         let upscale = self
             .passes
             .bind_upscale(&self.device, &viewport.frame, targets, image);
@@ -215,6 +205,6 @@ impl Renderer {
 
     /// The film textures `viewport`'s last frame wrote.
     pub fn targets<'a>(&self, viewport: &'a Viewport) -> Option<&'a Targets> {
-        viewport.targets.as_ref()
+        viewport.targets.as_ref().map(|(t, _)| t)
     }
 }

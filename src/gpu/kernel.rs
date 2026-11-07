@@ -1,6 +1,7 @@
 //! The compute kernels' plumbing: bind group layout entries, shader assembly
 //! (the common code, then the parts a pass reads, then its own source) and
 //! a [`Kernel`]: a pipeline and its group 0, each view binding its own.
+use super::scene::MAX_VOLUMES;
 use crate::render::bvh::MAX_DEPTH;
 use kinogaki_render_api::display::wgpu;
 
@@ -89,7 +90,10 @@ const COMMON: &str = include_str!("shaders/common.wgsl");
 
 /// The shared parts of the passes' sources.
 pub mod part {
-    /// The BVH's traversals (its stack is the kernel's to size).
+    /// A surface at a point: its texture, tint and cutout.
+    pub const SURFACE: &str = include_str!("shaders/surface.wgsl");
+    /// The BVH's traversals (its stack is the kernel's to size), after
+    /// [`SURFACE`].
     pub const BVH: &str = include_str!("shaders/bvh.wgsl");
     /// The volumes' crossings, density and transmittance.
     pub const MEDIUM: &str = include_str!("shaders/medium.wgsl");
@@ -102,10 +106,11 @@ pub mod part {
 }
 
 /// A shader module of the common code, `parts`, then the pass's own source:
-/// with the constants the parts read (the BVH's stack, AO's rays).
+/// with the constants the parts read (the BVH's stack, AO's rays, the most
+/// volumes).
 pub fn shader(device: &wgpu::Device, label: &str, parts: &[&str]) -> wgpu::ShaderModule {
     let mut source = format!(
-        "{COMMON}\nconst STACK: u32 = {}u;\nconst AO_RAYS: u32 = {AO_RAYS}u;\n",
+        "{COMMON}\nconst STACK: u32 = {}u;\nconst AO_RAYS: u32 = {AO_RAYS}u;\nconst MAX_VOLUMES: u32 = {MAX_VOLUMES}u;\n",
         MAX_DEPTH + 1
     );
     for part in parts {

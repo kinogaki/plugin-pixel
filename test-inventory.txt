@@ -1,6 +1,8 @@
 # Every test of this repository: <package>/<target> <kind> <name>.
 # Written by `python3 tools/check_all.py --inventory`; every check compares its tests with it.
 kinogaki-pixel/gpu gpu conformance::pixel_renders_what_a_host_sends
+kinogaki-pixel/gpu gpu cutouts::lit_fog_is_lit_where_a_cutout_cuts_the_card_away
+kinogaki-pixel/gpu gpu cutouts::shadows_ao_and_bounces_pass_where_a_cutout_cuts_the_card_away
 kinogaki-pixel/gpu gpu engine::a_camera_moved_renders_the_view_through_it_alone
 kinogaki-pixel/gpu gpu engine::a_change_renders_one_frame_and_rest_renders_none
 kinogaki-pixel/gpu gpu engine::a_compositor_reads_the_film_and_the_outputs_it_keeps
@@ -9,6 +11,7 @@ kinogaki-pixel/gpu gpu engine::a_dropped_views_kept_outputs_go_with_it
 kinogaki-pixel/gpu gpu engine::a_final_read_through_a_camera_gone_fails
 kinogaki-pixel/gpu gpu engine::a_new_color_renders_again_and_views_share_the_scene
 kinogaki-pixel/gpu gpu engine::a_preview_is_a_swatch_of_the_material
+kinogaki-pixel/gpu gpu engine::a_zero_normal_shades_as_its_triangles_own
 kinogaki-pixel/gpu gpu engine::an_unlit_surface_is_its_color_whatever_lights_it
 kinogaki-pixel/gpu gpu engine::final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go
 kinogaki-pixel/gpu gpu engine::the_light_falls_on_the_shade_levels
@@ -31,6 +34,7 @@ kinogaki-pixel/lib test gpu::records::tests::area_lights_pack_their_power_and_di
 kinogaki-pixel/lib test gpu::records::tests::distant_lights_pack_their_illuminance
 kinogaki-pixel/lib test gpu::records::tests::spots_pack_their_intensity_cone_and_gobo
 kinogaki-pixel/lib test gpu::records::tests::the_frame_holds_each_level_of_both_ramps
+kinogaki-pixel/lib test gpu::scene::tests::a_cut_out_meshs_traced_triangles_keep_their_corners
 kinogaki-pixel/lib test gpu::scene::tests::a_mesh_made_again_is_written_where_it_lies
 kinogaki-pixel/lib test gpu::scene::tests::media_carry_their_volumes_index
 kinogaki-pixel/lib test gpu::scene::tests::meshes_lie_side_by_side_and_instances_draw_by_mesh
@@ -75,6 +79,7 @@ kinogaki-pixel/lib test render::film::tests::film_size_is_the_ceiling
 kinogaki-pixel/lib test render::film::tests::grid_is_anchored_to_the_view
 kinogaki-pixel/lib test render::film::tests::upscale_mapping_is_exact
 kinogaki-pixel/lib test render::mesh::tests::a_folded_square_keeps_each_halfs_flat_normal
+kinogaki-pixel/lib test render::mesh::tests::a_held_normal_of_no_direction_is_its_triangles_own
 kinogaki-pixel/lib test render::mesh::tests::corners_holding_the_same_share_a_vertex
 kinogaki-pixel/lib test render::mesh::tests::its_hierarchy_traces_its_triangles
 kinogaki-pixel/lib test sampled::tests::a_gltf_texture_reads_its_placement_wraps_filter_and_factor

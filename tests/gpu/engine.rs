@@ -1,13 +1,13 @@
 //! Pixel as a host drives it, on the GPU: a frame a change and none at rest,
 //! one wake a frame, the grid locked to the view, the shade levels, an unlit
 //! surface, a material's new color, views sharing a scene, a camera moved,
-//! a deformed shape, final outputs, previews, the film a compositor reads, and a
-//! dropped read.
+//! a deformed shape, a zero normal, final outputs, previews, the film a
+//! compositor reads, and a dropped read.
 use super::support::{LIMIT, at, pixel, scene, surface, unlit, view};
 use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::display::Texture;
 use kinogaki_render_api::geometry::image::{Image, metadata};
-use kinogaki_render_api::geometry::{Domain, Vec3};
+use kinogaki_render_api::geometry::{Attribute, Domain, Meaning, Vec3, names};
 use kinogaki_render_api::standard::{Light, Shape as LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
@@ -236,6 +236,37 @@ fn a_deformed_shape_renders_where_its_points_moved() {
     );
     let back = middle(0.0);
     assert!(back[0] > back[1] * 2.0, "the box back: {back:?}");
+}
+
+/// An authored zero normal shades as its triangle's own: the box holding
+/// `N`s of zero renders as the box holding none (its light went NaN).
+#[test]
+#[ignore = "gpu"]
+fn a_zero_normal_shades_as_its_triangles_own() {
+    let (mut engine, _display, waiter, _device) = pixel();
+    let scene = scene();
+    let (box_id, Prim::Shape(held)) = scene.added[3].clone() else {
+        panic!("the box");
+    };
+    engine.update(scene);
+    engine.view(ViewId(1), view(64, 48, eye(), &[]));
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
+    let flat = engine.latest(ViewId(1)).unwrap();
+    let zero = Attribute::tuples(vec![[0.0f32; 3]; 8], Meaning::Normal).expect("normals");
+    let zeroed = held.rebuilt().primvar(Domain::Point, names::N, zero);
+    engine.update(SceneUpdate {
+        changed: vec![Change::new(
+            box_id,
+            Dirty::PRIMVARS,
+            Prim::Shape(zeroed.build().expect("the box")),
+        )],
+        ..SceneUpdate::new()
+    });
+    waiter.until(LIMIT, || {
+        (engine.latest(ViewId(1))).is_some_and(|f| f.generation > flat.generation)
+    });
+    let zeroed = engine.latest(ViewId(1)).unwrap();
+    assert!(zeroed.pixels == flat.pixels, "{:?}", at(&zeroed, 32, 26));
 }
 
 #[test]

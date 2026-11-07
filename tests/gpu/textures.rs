@@ -3,12 +3,11 @@
 //! picture, shows each texel where the coordinates put it (the nearest
 //! texel), each axis wrapped as its node says, the placement a glTF texture
 //! gives, and nothing where a cutout cuts its alpha.
-use super::support::{LIMIT, at, look, pixel};
+use super::support::{LIMIT, at, look, pixel, unlit_cutout};
 use kinogaki_pixel::sampled::sampled;
-use kinogaki_render_api::geometry::image::{Encoding, Format, Image, ImageSource, Rect, Sample};
+use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample};
 use kinogaki_render_api::geometry::{Attribute, Column, Domain, Meaning, Sampled, Vec3, names};
-use kinogaki_render_api::material::mtlx::def;
-use kinogaki_render_api::value::{Parameters, Value};
+use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
     Camera, Id, Material, MaterialNetwork, Prim, PrimId, Projection, SceneUpdate, Shape, Subsets,
     Topology, ViewCamera, ViewDesc, ViewId, ViewMode,
@@ -57,33 +56,6 @@ fn square(lo: f32, hi: f32) -> Shape {
     ))
     .build()
     .unwrap()
-}
-
-/// Surface Unlit Cutout of a glTF color image holding `values`, reading
-/// Texture prim 2, cut out at alpha 0.5.
-fn unlit(values: &[(&str, Value)]) -> MaterialNetwork {
-    let mut built = MaterialNetwork::builder();
-    let held = [("alpha_mode".to_owned(), Value::Integer(1))].into();
-    let s = built
-        .node(&def("ND_kinogaki_surface_unlit").unwrap(), &held)
-        .unwrap();
-    let values: Parameters = (values.iter())
-        .map(|(n, v)| ((*n).to_owned(), v.clone()))
-        .chain([("filtertype".to_owned(), Value::Choice("closest".into()))])
-        .collect();
-    let t = built
-        .node(&def("ND_kinogaki_gltf_colorimage").unwrap(), &values)
-        .unwrap();
-    built
-        .image(t, "file", ImageSource::path("/t/four.png"))
-        .unwrap();
-    built.link(t, "outcolor", s, "emission_color").unwrap();
-    built.link(t, "outa", s, "opacity").unwrap();
-    let mut network = built.build(s).unwrap();
-    network.nodes_mut()[t as usize]
-        .textures
-        .insert("file".into(), Id::of(id(2)));
-    network
 }
 
 /// The picture as the host sends it: premultiplied.
@@ -153,7 +125,7 @@ fn near(a: [f32; 4], b: [f32; 4]) -> bool {
 #[ignore = "gpu"]
 fn each_texel_shows_where_its_coordinates_put_it_and_a_cutout_shows_nothing() {
     let range = (0.0, 1.0);
-    let frame = rendered(unlit(&[]), range);
+    let frame = rendered(unlit_cutout(id(2), &[]), range);
     // v runs up, the picture's rows down: red top left.
     for (uv, texel) in [((0.25, 0.75), 0), ((0.75, 0.75), 1), ((0.25, 0.25), 2)] {
         let (x, y) = pixel_of(uv, range);
@@ -178,7 +150,7 @@ fn each_axis_wraps_as_its_node_says() {
         ("constant", None),
     ] {
         let mode_value = [("uaddressmode", Value::Choice(mode.into()))];
-        let frame = rendered(unlit(&mode_value), range);
+        let frame = rendered(unlit_cutout(id(2), &mode_value), range);
         let (x, y) = pixel_of((1.25, 0.75), range);
         let shown = at(&frame, x, y);
         match expected {
@@ -192,7 +164,7 @@ fn each_axis_wraps_as_its_node_says() {
 #[ignore = "gpu"]
 fn a_gltf_texture_rotates_as_its_graph_places_it() {
     let range = (0.0, 1.0);
-    let network = unlit(&[("rotate", Value::Number(90.0))]);
+    let network = unlit_cutout(id(2), &[("rotate", Value::Number(90.0))]);
     let texture = network
         .links()
         .iter()

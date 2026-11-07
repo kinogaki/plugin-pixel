@@ -47,7 +47,7 @@ fn gbuffer(
     let module = super::kernel::shader(
         device,
         "pixel gbuffer",
-        &[include_str!("shaders/gbuffer.wgsl")],
+        &[part::SURFACE, include_str!("shaders/gbuffer.wgsl")],
     );
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("pixel gbuffer"),
@@ -123,22 +123,17 @@ impl Passes {
             texture(3, true),
         ];
         let with = |more: &[wgpu::BindGroupLayoutEntry]| [&gbuffer_in[..], more].concat();
-        let lit = [part::BVH, part::MEDIUM, part::GOBO, part::LIGHT];
+        let lit = [
+            part::SURFACE,
+            part::BVH,
+            part::MEDIUM,
+            part::GOBO,
+            part::LIGHT,
+        ];
         let source = |own: &'static str, extra: &[&'static str]| [&lit[..], extra, &[own]].concat();
-        // The frame, and the atlas of pictures its textures read texels of.
-        let atlas = wgpu::BindGroupLayoutEntry {
-            binding: 1,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
-            count: None,
-        };
         let gbuffer_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pixel gbuffer"),
-            entries: &[uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT), atlas],
+            entries: &[uniform(0, wgpu::ShaderStages::VERTEX_FRAGMENT)],
         });
         Passes {
             gbuffer: gbuffer(device, &gbuffer_layout, scene),
@@ -147,6 +142,7 @@ impl Passes {
                 device,
                 "pixel ambient",
                 &[
+                    part::SURFACE,
                     part::BVH,
                     part::HEMISPHERE,
                     include_str!("shaders/ambient.wgsl"),
@@ -209,11 +205,11 @@ impl Passes {
         }
     }
 
-    /// A view's groups over `frame`, the scene's atlas and `t`.
+    /// A view's groups over `frame` and `t`.
     pub fn bind<'a>(
         &self,
         device: &wgpu::Device,
-        (frame, atlas): (&'a wgpu::Buffer, &'a wgpu::TextureView),
+        frame: &'a wgpu::Buffer,
         t: &'a Targets,
     ) -> Groups {
         use wgpu::BindingResource::TextureView as Tex;
@@ -233,7 +229,7 @@ impl Passes {
                 device,
                 "pixel gbuffer",
                 &self.gbuffer_layout,
-                &[frame.clone(), Tex(atlas)],
+                std::slice::from_ref(&frame),
             ),
             ambient: (self.ambient).bind(
                 device,
