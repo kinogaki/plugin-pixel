@@ -1,8 +1,9 @@
 //! The renderer on a host's wgpu device: the scene's buffers in two levels
 //! (`scene`: the meshes and the instances placing them) and seven passes, recorded for one view at a time into a display image:
 //!
-//! 1. **G-buffer** (raster): albedo (the material's color × its tint),
-//!    normal, depth, object id and the material's transmittance.
+//! 1. **G-buffer** (raster): albedo (the material's color × its tint × its
+//!    texture, sampled from the atlas of pictures), normal, depth, object
+//!    id and the material's transmittance.
 //! 2. **Ambient**: the domes' light × ray-traced AO.
 //! 3. **Direct**: the lights with hard shadow rays, gobos and light through
 //!    thin translucent surfaces, darkened by AO as AO on Direct asks.
@@ -14,6 +15,7 @@
 //!
 //! A [`Viewport`] is one view's uniform, film textures and bind groups.
 use kinogaki_render_api::display::wgpu;
+mod atlas;
 mod kernel;
 mod passes;
 pub mod readback;
@@ -91,7 +93,7 @@ impl Renderer {
     /// A renderer of an empty scene on `device` and `queue` (the host's own;
     /// wgpu handles are shared, not copied).
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Renderer {
-        let scene = GpuScene::new(device);
+        let scene = GpuScene::new(device, queue);
         Renderer {
             passes: Passes::new(device, &scene.layout),
             device: device.clone(),
@@ -116,7 +118,7 @@ impl Renderer {
 
     /// Takes `scene`, uploading what `changed` says.
     pub fn set_scene(&mut self, scene: &Scene, changed: Changed) {
-        self.scene.set(&self.device, scene, changed);
+        self.scene.set((&self.device, &self.queue), scene, changed);
         self.generation += u64::from(changed.any());
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
     }
@@ -171,7 +173,8 @@ impl Renderer {
             .as_ref()
             .is_none_or(|(g, _)| *g != self.generation)
         {
-            let groups = self.passes.bind(&self.device, &viewport.frame, targets);
+            let frame = (&viewport.frame, &self.scene.texels);
+            let groups = self.passes.bind(&self.device, frame, targets);
             viewport.groups = Some((self.generation, groups));
         }
         let (_, groups) = viewport.groups.as_ref()?;

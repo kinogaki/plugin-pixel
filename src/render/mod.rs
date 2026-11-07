@@ -23,6 +23,8 @@ pub struct Scene {
     pub instances: Vec<Instance>,
     /// The materials instances shade with, by [`Instance::surface`].
     pub surfaces: Vec<Surface>,
+    /// The pictures surfaces sample, by [`Texture::picture`].
+    pub pictures: Vec<Arc<Picture>>,
     /// The closed meshes filled with a medium (never drawn).
     pub volumes: Vec<Volume>,
     /// The lights with a place or a direction.
@@ -46,30 +48,125 @@ pub struct Mesh {
     /// What each corner's albedo is multiplied by (the material's color
     /// attribute; none: white).
     pub tints: Option<Vec<[f32; 3]>>,
+    /// Each corner's texture coordinates, which the material's texture
+    /// reads (none: it has none).
+    pub uvs: Option<Vec<[f32; 2]>>,
     /// The hierarchy over its triangles.
     pub bvh: bvh::Bvh,
 }
 
+/// What a mesh holds at each corner beside its position.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Corners {
+    /// Shading normals (none: flat).
+    pub normals: Option<Vec<[f32; 3]>>,
+    /// What the albedo is multiplied by (none: white).
+    pub tints: Option<Vec<[f32; 3]>>,
+    /// Texture coordinates (none: none).
+    pub uvs: Option<Vec<[f32; 2]>>,
+}
+
 impl Mesh {
     /// The mesh of `corners` (whole triangles: a partial one is dropped),
-    /// its normals and tints kept only when they match them, its hierarchy
+    /// what it holds at them kept only where it matches them, its hierarchy
     /// built.
-    pub fn new(
-        mut corners: Vec<[f32; 3]>,
-        normals: Option<Vec<[f32; 3]>>,
-        tints: Option<Vec<[f32; 3]>>,
-    ) -> Mesh {
+    pub fn new(mut corners: Vec<[f32; 3]>, held: Corners) -> Mesh {
         corners.truncate(corners.len() / 3 * 3);
         let fits = |c: Option<Vec<[f32; 3]>>| c.filter(|c| c.len() == corners.len());
-        let (normals, tints) = (fits(normals), fits(tints));
+        let (normals, tints) = (fits(held.normals), fits(held.tints));
+        let uvs = held.uvs.filter(|c| c.len() == corners.len());
         let bvh = bvh::Bvh::build(corners.as_chunks::<3>().0);
         Mesh {
             corners,
             normals,
             tints,
+            uvs,
             bvh,
         }
     }
+}
+
+/// A picture a surface samples: linear ACEScg texels, straight (not
+/// premultiplied), rows from the top, and their mean (what a ray bouncing off
+/// it sees).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picture {
+    /// Its width and height.
+    pub size: [u32; 2],
+    /// Its texels, row by row.
+    pub texels: Vec<[f32; 4]>,
+    /// Their mean.
+    pub mean: [f32; 4],
+}
+
+impl Picture {
+    /// `texels` of a `size` picture, their mean taken.
+    pub fn new(size: [u32; 2], texels: Vec<[f32; 4]>) -> Picture {
+        let count = texels.len().max(1) as f64;
+        let mean = std::array::from_fn(|k| {
+            (texels.iter().map(|t| f64::from(t[k])).sum::<f64>() / count) as f32
+        });
+        Picture { size, texels, mean }
+    }
+
+    /// Half the size along each side longer than one, each texel the mean of
+    /// those it covers.
+    pub fn halved(&self) -> Picture {
+        let [w, h] = self.size;
+        let (sw, sh) = (u32::from(w > 1) + 1, u32::from(h > 1) + 1);
+        let (nw, nh) = (w.div_ceil(sw), h.div_ceil(sh));
+        let mut texels = Vec::with_capacity((nw * nh) as usize);
+        for y in 0..nh {
+            for x in 0..nw {
+                let mut sum = [0.0f32; 4];
+                let mut n = 0.0;
+                for dy in 0..sh {
+                    for dx in 0..sw {
+                        let (sx, sy) = ((x * sw + dx).min(w - 1), (y * sh + dy).min(h - 1));
+                        let t = self.texels[(sy * w + sx) as usize];
+                        sum = std::array::from_fn(|k| sum[k] + t[k]);
+                        n += 1.0;
+                    }
+                }
+                texels.push(sum.map(|v| v / n));
+            }
+        }
+        Picture::new([nw, nh], texels)
+    }
+}
+
+/// How a picture's coordinates read past its edges, along one axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Wrap {
+    /// It repeats.
+    #[default]
+    Repeat,
+    /// Its edge texel stretches on.
+    Clamp,
+    /// It repeats mirrored.
+    Mirror,
+    /// Black (MaterialX's `constant`, its default) outside.
+    Black,
+}
+
+/// A surface's texture: its color times a picture, read at the transformed
+/// texture coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Texture {
+    /// The picture, an index into [`Scene::pictures`].
+    pub picture: u32,
+    /// Where corner coordinates `(u, v)` read it, by rows:
+    /// `transform · (u, v, 1)`, v up (MaterialX's; the picture's rows run
+    /// down).
+    pub transform: [[f32; 3]; 2],
+    /// How each axis reads past the edges.
+    pub wrap: [Wrap; 2],
+    /// Nearest texel (pixel art's `closest`), else bilinear.
+    pub nearest: bool,
+    /// What a texel is multiplied by (rgb and alpha).
+    pub factor: [f32; 4],
+    /// The alpha below which the surface is cut out (none: never).
+    pub cutout: Option<f32>,
 }
 
 /// A mesh placed in the world with a material.
@@ -102,6 +199,8 @@ pub struct Surface {
     /// Unlit (MaterialX's Surface Unlit): what every ray sees is its color,
     /// whatever lights it.
     pub unlit: bool,
+    /// The picture its color is multiplied by, when it samples one.
+    pub texture: Option<Texture>,
 }
 
 impl Default for Surface {
@@ -112,6 +211,7 @@ impl Default for Surface {
             translucency: 0.0,
             translucency_color: [1.0; 3],
             unlit: false,
+            texture: None,
         }
     }
 }

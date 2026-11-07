@@ -10,9 +10,14 @@ kinogaki-pixel/gpu gpu engine::a_preview_is_a_swatch_of_the_material
 kinogaki-pixel/gpu gpu engine::an_unlit_surface_is_its_color_whatever_lights_it
 kinogaki-pixel/gpu gpu engine::final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go
 kinogaki-pixel/gpu gpu engine::the_light_falls_on_the_shade_levels
+kinogaki-pixel/gpu gpu textures::a_gltf_texture_rotates_as_its_graph_places_it
+kinogaki-pixel/gpu gpu textures::each_axis_wraps_as_its_node_says
+kinogaki-pixel/gpu gpu textures::each_texel_shows_where_its_coordinates_put_it_and_a_cutout_shows_nothing
 kinogaki-pixel/gpu hand moves::hand_run_a_moved_object_beside_many_instances
 kinogaki-pixel/lib test description::tests::it_declares_its_lights_the_fog_and_every_output
 kinogaki-pixel/lib test engine::readings::tests::a_film_upscales_in_blocks_from_the_top_left
+kinogaki-pixel/lib test gpu::atlas::tests::pictures_lie_on_shelves_and_keep_their_texels
+kinogaki-pixel/lib test gpu::atlas::tests::what_doesnt_fit_is_halved_largest_first
 kinogaki-pixel/lib test gpu::records::tests::area_lights_pack_their_power_and_direction
 kinogaki-pixel/lib test gpu::records::tests::distant_lights_pack_their_illuminance
 kinogaki-pixel/lib test gpu::records::tests::spots_pack_their_intensity_cone_and_gobo
@@ -21,10 +26,13 @@ kinogaki-pixel/lib test gpu::scene::tests::media_carry_their_volumes_index
 kinogaki-pixel/lib test gpu::scene::tests::meshes_lie_side_by_side_and_instances_draw_by_mesh
 kinogaki-pixel/lib test lights::tests::distant_lights_and_spots_take_a_gobo_and_the_rim_comes_last
 kinogaki-pixel/lib test lights::tests::emissions_are_colors_at_their_intensity
+kinogaki-pixel/lib test nodes::tests::a_gltf_texture_reaches_pixel_as_its_surfaces_texture_with_its_cutout
 kinogaki-pixel/lib test nodes::tests::a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none
 kinogaki-pixel/lib test nodes::tests::a_surface_reads_its_constants_and_its_attribute
+kinogaki-pixel/lib test nodes::tests::a_textured_surface_is_an_openpbr_surface_of_its_texture
 kinogaki-pixel/lib test nodes::tests::a_volume_reads_its_medium_and_shows_as_one
 kinogaki-pixel/lib test nodes::tests::materialx_reaches_pixel_as_surface_unlit_or_its_standard_forms_surface
+kinogaki-pixel/lib test nodes::tests::surface_unlit_cutout_cuts_its_texture_out_in_its_mask_mode
 kinogaki-pixel/lib test nodes::tests::surface_unlit_is_an_unlit_surface_of_its_emission
 kinogaki-pixel/lib test nodes::tests::the_standard_form_becomes_a_surface_of_its_base_color
 kinogaki-pixel/lib test nodes::tests::the_standard_form_of_light_alone_is_unlit_and_an_attribute_drives_the_color
@@ -53,6 +61,8 @@ kinogaki-pixel/lib test render::dither::tests::thresholds_are_centred_and_tile
 kinogaki-pixel/lib test render::film::tests::film_size_is_the_ceiling
 kinogaki-pixel/lib test render::film::tests::grid_is_anchored_to_the_view
 kinogaki-pixel/lib test render::film::tests::upscale_mapping_is_exact
+kinogaki-pixel/lib test sampled::tests::a_gltf_texture_reads_its_placement_wraps_filter_and_factor
+kinogaki-pixel/lib test sampled::tests::an_image_reads_its_place2d_and_a_color_image_its_color_and_vertex_colors
 kinogaki-pixel/lib test settings::tests::sample_counts_are_never_keyed
 kinogaki-pixel/lib test settings::tests::the_defaults_read_as_the_shade_ramp_at_four_levels
 kinogaki-pixel/lib test settings::tests::values_are_read_by_name_and_unfitting_ones_take_their_default
@@ -62,5 +72,6 @@ kinogaki-pixel/sync test a_new_color_rewrites_the_object_table_alone
 kinogaki-pixel/sync test a_prototype_renders_only_through_its_instancer_with_its_materials
 kinogaki-pixel/sync test a_removed_shape_leaves_the_scene
 kinogaki-pixel/sync test a_shape_is_a_world_space_mesh_tinted_by_its_material_attribute
+kinogaki-pixel/sync test a_texture_samples_its_prims_picture_at_each_corners_coordinates
 kinogaki-pixel/sync test a_volume_material_makes_its_shape_a_volume_never_drawn
 kinogaki-pixel/sync test lights_domes_rims_and_fog_light_the_scene

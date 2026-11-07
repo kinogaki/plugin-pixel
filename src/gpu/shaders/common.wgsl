@@ -66,6 +66,19 @@ struct Instance {
     transmit: vec4<f32>,
     // x: the object id; y: its mesh's BVH root node.
     id: vec4<u32>,
+    // Its texture's picture in the atlas: x, y its corner; z its width and
+    // height (16 bits each); w the flags (records.rs: 1 textured, 2 the
+    // nearest texel, bits 2-3 and 4-5 the wraps along s and t: repeat,
+    // clamp, mirror, black; 64 a cutout).
+    texture: vec4<u32>,
+    // The texture's transform, by rows; uv_s.w: the cutout's alpha.
+    uv_s: vec4<f32>,
+    uv_t: vec4<f32>,
+    // What a texel is multiplied by.
+    factor: vec4<f32>,
+    // rgb: the albedo a ray bouncing off it sees (its color × its texture's
+    // mean).
+    mean: vec4<f32>,
 }
 
 // The id of a film pixel no mesh covers (the standard objectId's miss).

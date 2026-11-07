@@ -21,6 +21,7 @@ pub mod nodes;
 pub mod outputs;
 pub mod presets;
 pub mod render;
+pub mod sampled;
 pub mod settings;
 pub mod sync;
 

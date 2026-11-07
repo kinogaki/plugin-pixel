@@ -4,3 +4,4 @@ mod conformance;
 mod engine;
 mod moves;
 mod support;
+mod textures;

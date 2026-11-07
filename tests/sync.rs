@@ -337,3 +337,91 @@ fn a_cycle_of_instancers_places_nothing_and_says_so() {
     let said = sync.problems();
     assert!(said.iter().any(|d| d.message.contains("cycle")), "{said:?}");
 }
+
+/// A Pixel Surface whose color a texture node drives, reading Texture prim
+/// `texture`.
+fn textured(texture: PrimId) -> Prim {
+    use kinogaki_render_api::geometry::image::ImageSource;
+    use kinogaki_render_api::material::mtlx::def;
+    let description = kinogaki_pixel::description::description();
+    let surface = description.node_def(SURFACE).unwrap().clone();
+    let mut built = MaterialNetwork::builder();
+    let s = built.node(&surface, &Parameters::new()).unwrap();
+    let image = [("filtertype".to_owned(), Value::Choice("closest".into()))].into();
+    let t = built
+        .node(&def("ND_image_color3").unwrap(), &image)
+        .unwrap();
+    built
+        .image(t, "file", ImageSource::path("/t/two.png"))
+        .unwrap();
+    built.link(t, "out", s, "color").unwrap();
+    let mut network = built.build(s).unwrap();
+    // What the host does as it sends it: the image's Texture prim.
+    network.nodes_mut()[t as usize]
+        .textures
+        .insert("file".to_owned(), Id::of(texture));
+    Prim::Material(Material {
+        network: Arc::new(network),
+        path: Arc::from("/m"),
+        double_sided: true,
+    })
+}
+
+/// A 2 × 1 picture: `left` then `right`, rgba, premultiplied as the host
+/// sends colors.
+fn picture(left: [f32; 4], right: [f32; 4]) -> Prim {
+    use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample};
+    let format = Format::rgba(Sample::F32, Encoding::color("ACEScg", true));
+    let texels = [left, right].concat();
+    let image = Image::builder(Rect::new([0, 0], [2, 1]).unwrap())
+        .plane(format, bytemuck::cast_slice(&texels))
+        .build()
+        .unwrap();
+    Prim::Texture(image)
+}
+
+#[test]
+fn a_texture_samples_its_prims_picture_at_each_corners_coordinates() {
+    let mut sync = Sync::default();
+    let uv = Attribute::tuples(
+        vec![[0.0f32, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        Meaning::TextureCoord,
+    )
+    .unwrap();
+    let shape = (square(Some(id(0)), [1.0; 3]).rebuilt())
+        .primvar(Domain::Point, names::UV, uv)
+        .build()
+        .unwrap();
+    let half = [0.25, 0.25, 0.25, 0.5];
+    let changed = sync.apply(added(vec![
+        (id(0), textured(id(2))),
+        (id(1), Prim::Shape(shape)),
+        (id(2), picture([1.0, 0.0, 0.0, 1.0], half)),
+    ]));
+    assert!(changed.meshes && changed.surfaces);
+    let scene = sync.scene();
+    let [picture] = &scene.pictures[..] else {
+        panic!("one picture");
+    };
+    assert_eq!(picture.size, [2, 1]);
+    assert_eq!(picture.texels[1], [0.5, 0.5, 0.5, 0.5], "made straight");
+    let texture = scene.surfaces[0].texture.expect("its texture");
+    assert!(texture.nearest && texture.picture == 0);
+    let uvs = scene.meshes[0]
+        .uvs
+        .as_ref()
+        .expect("the corners' coordinates");
+    assert_eq!(uvs[..3], [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
+    // A new picture in the prim is read again.
+    let change = Change::new(
+        id(2),
+        Dirty::ALL,
+        self::picture([0.0, 1.0, 0.0, 1.0], [0.0; 4]),
+    );
+    let changed = sync.apply(SceneUpdate {
+        changed: vec![change],
+        ..SceneUpdate::new()
+    });
+    assert!(changed.surfaces);
+    assert_eq!(sync.scene().pictures[0].texels[0], [0.0, 1.0, 0.0, 1.0]);
+}

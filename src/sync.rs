@@ -13,7 +13,11 @@
 //!   world space, and are not drawn. A material's color attribute becomes
 //!   each corner's tint (vertex, point, primitive or detail values; white
 //!   where a shape lacks it); `N` its shading normals.
-//! - **Materials** become surfaces and media ([`nodes::material`]).
+//! - **Materials** become surfaces and media ([`nodes::material`]); a
+//!   surface's texture samples the picture its Texture prim holds (linear
+//!   ACEScg, made straight, its longer side at most [`MAX_PICTURE`] texels:
+//!   halved until it is), each corner reading the coordinates its primvar
+//!   holds.
 //! - **Declared prims** become lights: the domes add up into the ambient
 //!   light (a ground color below the horizon), the rims by their side, the
 //!   first visible fog is the fog.
@@ -30,8 +34,10 @@ use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Material};
 use crate::render::{
-    Ambient, Fog, Instance, Light, LightShape, Mesh, Rims, Scene, Surface, Volume,
+    Ambient, Corners, Fog, Instance, Light, LightShape, Mesh, Picture, Rims, Scene, Surface,
+    Texture, Volume,
 };
+use kinogaki_render_api::geometry::image::Image;
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
 use kinogaki_render_api::standard::{self, Shape as LightKind};
 use kinogaki_render_api::{
@@ -46,6 +52,8 @@ pub struct Sync {
     prims: BTreeMap<PrimId, Prim>,
     /// Each Material prim's material and its index in the scene's surfaces.
     materials: BTreeMap<PrimId, (Material, u32)>,
+    /// Each Texture prim's picture, made once.
+    pictures: BTreeMap<PrimId, Arc<Picture>>,
     /// The Material prim each of the scene's volumes is filled by.
     filled_by: Vec<Option<PrimId>>,
     /// What each placed shape makes, by the shape and the material an
@@ -90,7 +98,7 @@ impl Touched {
     fn by(&mut self, prim: &Prim) {
         match prim {
             Prim::Shape(_) | Prim::Instancer(_) => self.shapes = true,
-            Prim::Material(_) => self.materials = true,
+            Prim::Material(_) | Prim::Texture(_) => self.materials = true,
             Prim::Declared(_) => self.declared = true,
             _ => {}
         }
@@ -147,6 +155,7 @@ impl Sync {
             self.prims.insert(change.id, change.prim);
         }
         self.made.retain(|(shape, _), _| !remade.contains(shape));
+        self.pictures.retain(|texture, _| !remade.contains(texture));
         if let Some(settings) = update.settings {
             self.settings = settings;
             touched.declared = true;
@@ -177,11 +186,14 @@ impl Sync {
         changed
     }
 
-    /// The materials again; whether a material's kind or color attribute
-    /// changed (the meshes are made again).
+    /// The materials again, and the pictures their textures sample; whether
+    /// a material's kind, tint or coordinates changed (the meshes are made
+    /// again).
     fn read_materials(&mut self) -> bool {
         let before = std::mem::take(&mut self.materials);
         let mut surfaces = Vec::new();
+        let mut pictures: Vec<Arc<Picture>> = Vec::new();
+        let mut placed: BTreeMap<PrimId, u32> = BTreeMap::new();
         self.problems.materials.clear();
         for (id, prim) in &self.prims {
             if let Prim::Material(m) = prim {
@@ -192,18 +204,52 @@ impl Sync {
                     )));
                 }
                 let material = nodes::material(&m.network);
-                if let Material::Surface(s, _) = &material {
-                    surfaces.push(*s);
-                } else {
-                    surfaces.push(Surface::default());
-                }
+                let surface = match &material {
+                    Material::Surface(s, look) => {
+                        let texture = look.texture.as_ref().and_then(|t| {
+                            let image = t.image?;
+                            let picture = match placed.get(&image) {
+                                Some(&at) => at,
+                                None => {
+                                    let made = match self.pictures.get(&image) {
+                                        Some(made) => made.clone(),
+                                        None => match self.prims.get(&image) {
+                                            Some(Prim::Texture(read)) => Arc::new(picture(read)),
+                                            _ => return None,
+                                        },
+                                    };
+                                    self.pictures.insert(image, made.clone());
+                                    pictures.push(made);
+                                    placed.insert(image, pictures.len() as u32 - 1);
+                                    pictures.len() as u32 - 1
+                                }
+                            };
+                            Some(Texture {
+                                picture,
+                                transform: t.transform,
+                                wrap: t.wrap,
+                                nearest: t.nearest,
+                                factor: t.factor,
+                                cutout: look.cutout,
+                            })
+                        });
+                        Surface { texture, ..*s }
+                    }
+                    Material::Volume(_) => Surface::default(),
+                };
+                surfaces.push(surface);
                 let index = surfaces.len() as u32 - 1;
                 self.materials.insert(*id, (material, index));
             }
         }
+        self.pictures.retain(|id, _| placed.contains_key(id));
         self.scene.surfaces = surfaces;
+        self.scene.pictures = pictures;
         let shape_of = |m: &(Material, u32)| match &m.0 {
-            Material::Surface(_, attribute) => Some((attribute.clone(), m.1)),
+            Material::Surface(_, look) => {
+                let uv = look.texture.as_ref().map(|t| t.uv.clone());
+                Some((look.tint().cloned(), uv, m.1))
+            }
             Material::Volume(_) => None,
         };
         let same = before.len() == self.materials.len()
@@ -370,16 +416,21 @@ impl Sync {
                 .collect();
             match self.material(material) {
                 Material::Volume(_) => made.volumes.push((material, positions)),
-                Material::Surface(_, attribute) => {
-                    let tints = attribute
-                        .as_ref()
-                        .and_then(|a| shape.corners::<3>(triangles, a));
-                    let mesh = Mesh::new(
-                        positions,
-                        normals.as_deref().map(corners),
-                        tints.as_deref().map(corners),
-                    );
-                    made.meshes.push((material, Arc::new(mesh)));
+                Material::Surface(_, look) => {
+                    let tints = look.tint().and_then(|a| shape.corners::<3>(triangles, a));
+                    let uvs =
+                        (look.texture.as_ref()).and_then(|t| shape.corners::<2>(triangles, &t.uv));
+                    let held = Corners {
+                        normals: normals.as_deref().map(corners),
+                        tints: tints.as_deref().map(corners),
+                        uvs: uvs.as_deref().map(|list| {
+                            ts.iter()
+                                .flat_map(|&t| (0..3).map(move |k| list[3 * t + k]))
+                                .collect()
+                        }),
+                    };
+                    made.meshes
+                        .push((material, Arc::new(Mesh::new(positions, held))));
                 }
             }
         }
@@ -557,5 +608,45 @@ fn fog_of(fog: standard::Fog) -> Fog {
         falloff: fog.falloff,
         lit: fog.inscatter,
         anisotropy: fog.anisotropy,
+    }
+}
+
+/// The longest side, in texels, of a picture a surface samples: a larger
+/// one is halved until it fits (Pixel's films are coarse).
+pub const MAX_PICTURE: u32 = 2048;
+
+/// `image`'s main layer as a picture: its display window's texels, rows from
+/// the top, straight where the host premultiplied them; a grey one grey in
+/// every channel.
+fn picture(image: &Image) -> Picture {
+    let window = image.display();
+    let [w, h] = window.size();
+    let [x0, y0] = window.min();
+    let channels = (image.layers().first()).map_or(4, |l| l.format().channels.len());
+    let mut texels = Vec::with_capacity(w as usize * h as usize);
+    for y in 0..h as i32 {
+        for x in 0..w as i32 {
+            let [r, g, b, a] = image.read_pixel(0, x0 + x, y0 + y);
+            let rgba = match channels {
+                1 => [r, r, r, 1.0],
+                2 => [r, r, r, g],
+                3 => [r, g, b, 1.0],
+                _ => [r, g, b, a],
+            };
+            texels.push(straight(rgba));
+        }
+    }
+    let mut picture = Picture::new([w, h], texels);
+    while picture.size[0].max(picture.size[1]) > MAX_PICTURE {
+        picture = picture.halved();
+    }
+    picture
+}
+
+/// `rgba` unpremultiplied where its alpha is between 0 and 1.
+fn straight([r, g, b, a]: [f32; 4]) -> [f32; 4] {
+    match a > 0.0 && a < 1.0 {
+        true => [r / a, g / a, b / a, a],
+        false => [r, g, b, a],
     }
 }

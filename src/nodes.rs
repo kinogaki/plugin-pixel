@@ -1,10 +1,12 @@
 //! Pixel's material nodes and what only its code knows of them.
 //!
-//! - **Pixel Surface** (`kinogaki.pixel.pixel_surface`): Color, times the
-//!   attribute its Color Attribute names (`Cd`) where a mesh has it;
-//!   Translucency makes it a thin surface: light reaching its back comes
-//!   through × Translucency × Translucency Color × its color, and light
-//!   passing it keeps × Translucency × Translucency Color.
+//! - **Pixel Surface** (`kinogaki.pixel.pixel_surface`): Color (a texture
+//!   node may drive it: its picture times its factor), times the attribute
+//!   its Color Attribute names (`Cd`) where a mesh has it; Cutout cuts it
+//!   out where the texture's alpha falls below it; Translucency makes it a
+//!   thin surface: light reaching its back comes through × Translucency ×
+//!   Translucency Color × its color, and light passing it keeps ×
+//!   Translucency × Translucency Color.
 //! - **Pixel Volume** (`kinogaki.pixel.pixel_volume`): fills its closed mesh
 //!   with a participating medium instead of shading its surface: Density
 //!   (extinction a unit of distance), Scatter Color (the single-scattering
@@ -12,27 +14,35 @@
 //!   Emission section and a Noise section (value-noise fBm in world space).
 //!
 //! Pixel has no node graph: each is a material on its own, its values
-//! constants, the network's shown node. Of MaterialX it renders Surface
-//! Unlit, as an unlit surface: its emission color × emission, whatever lights
-//! it, letting through transmission × transmission color. [`Rules`]
-//! approximates its materials for the shaded viewport, gives a Pixel Surface
-//! as an OpenPBR Surface, and makes one of another material's.
-use crate::render::{Medium, Surface};
+//! constants, the network's shown node, but for the texture node driving its
+//! color (MaterialX's `image` and glTF's texture nodes, read natively:
+//! [`sampled`]). Of MaterialX it renders Surface Unlit (and Kinogaki's
+//! Surface Unlit Cutout), as an unlit surface: its emission color ×
+//! emission, whatever lights it, letting through transmission ×
+//! transmission color. [`Rules`] approximates its materials for the shaded
+//! viewport, gives a Pixel Surface as an OpenPBR Surface, and makes one of
+//! another material's, its base color's texture and alpha cutout kept.
+use crate::render::{Medium, Surface, Wrap};
+use crate::sampled::{Sampled, is_texture, sampled};
+use kinogaki_render_api::geometry::image::{self, Sampling};
+use kinogaki_render_api::geometry::names;
 use kinogaki_render_api::material::mtlx;
-use kinogaki_render_api::material::standard::open_pbr;
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
-    Input, Link, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, Parameter, Section,
+    DisplayTexture, Input, MaterialDisplay, MaterialNetwork, MaterialRules, NetworkBuilder,
+    NodeDef, NodeIndex, Parameter, Section, Socket,
 };
 use kinogaki_studio_api::NodeTypeId;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// The Pixel Surface's id.
 pub const SURFACE: NodeTypeId = NodeTypeId::declared("kinogaki.pixel.pixel_surface");
 /// The Pixel Volume's id.
 pub const VOLUME: NodeTypeId = NodeTypeId::declared("kinogaki.pixel.pixel_volume");
-/// MaterialX's Surface Unlit, which Pixel renders as it is.
-const UNLIT: &str = "surface_unlit";
+/// MaterialX's Surface Unlit, and Kinogaki's Cutout of it, which Pixel
+/// renders as they are.
+const UNLIT: [&str; 2] = ["surface_unlit", "kinogaki_surface_unlit"];
 
 /// The groups a node's values sit in.
 const MAIN: &str = "main";
@@ -68,8 +78,9 @@ fn tip(input: Input, tooltip: &str, decimals: u8) -> Input {
 
 /// The Pixel Surface.
 fn surface() -> NodeDef {
+    let color = Parameter::new("color", "Color", ValueKind::Color, [0.8; 3]).group(MAIN);
     let mut def = NodeDef::new(SURFACE, "Pixel Surface", "Surface")
-        .input(value("color", "Color", MAIN, ValueKind::Color, [0.8; 3]))
+        .input(Input::Driven(color, Socket::Color3))
         .input(tip(
             value(
                 "attribute",
@@ -102,6 +113,11 @@ fn surface() -> NodeDef {
             ),
             "Tints the light that shows through; white keeps the Color",
             0,
+        ))
+        .input(tip(
+            value("cutout", "Cutout", MAIN, slider(0.0, 1.0, (0.0, 1.0)), 0.0),
+            "Cuts the surface out where its color's texture is less opaque than this",
+            2,
         ));
     def.aliases = ["pixel", "material", "surface", "flat", "toon", "sprite"]
         .map(Arc::from)
@@ -224,16 +240,35 @@ pub fn defs() -> Vec<NodeDef> {
 /// What a material renders as.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Material {
-    /// A surface, its color times the attribute named (none: its color alone).
-    Surface(Surface, Option<Arc<str>>),
+    /// A surface, its color times what it reads of its mesh and images.
+    Surface(Surface, Look),
     /// A medium filling its mesh.
     Volume(Medium),
 }
 
 impl Default for Material {
-    /// The default surface, reading no attribute.
+    /// The default surface, reading nothing.
     fn default() -> Material {
-        Material::Surface(Surface::default(), None)
+        Material::Surface(Surface::default(), Look::default())
+    }
+}
+
+/// What a surface's color is multiplied by beside its constants.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Look {
+    /// The attribute tinting each corner (none: white).
+    pub attribute: Option<Arc<str>>,
+    /// The texture it samples.
+    pub texture: Option<Sampled>,
+    /// The alpha below which the texture cuts the surface out.
+    pub cutout: Option<f32>,
+}
+
+impl Look {
+    /// The attribute tinting each corner: the surface's own, else its
+    /// texture's (glTF's vertex colors).
+    pub fn tint(&self) -> Option<&Arc<str>> {
+        (self.attribute.as_ref()).or_else(|| self.texture.as_ref()?.tint.as_ref())
     }
 }
 
@@ -266,19 +301,25 @@ impl Values<'_> {
 /// Volume, or MaterialX's Surface Unlit; anything else, or none: the
 /// default).
 pub fn material(network: &MaterialNetwork) -> Material {
-    let Some(node) = network.surface().map(|at| &network.nodes()[at as usize]) else {
+    let Some(at) = network.surface() else {
         return Material::default();
     };
+    let node = &network.nodes()[at as usize];
     let v = Values(&node.values);
-    if node.def.mtlx().is_some_and(|d| d.node == UNLIT) {
+    if let Some(unlit) = node.def.mtlx().filter(|d| UNLIT.contains(&d.node.as_str())) {
         let emission = v.number("emission", 1.0).max(0.0);
         let surface = Surface {
             color: v.color("emission_color", [1.0; 3]).map(|c| c * emission),
             translucency: v.number("transmission", 0.0).clamp(0.0, 1.0),
             translucency_color: v.color("transmission_color", [1.0; 3]),
             unlit: true,
+            texture: None,
         };
-        return Material::Surface(surface, None);
+        // Surface Unlit Cutout's mask mode cuts out at its cutoff.
+        let masks = unlit.node != UNLIT[0] && v.integer("alpha_mode", 2) == 1;
+        let mut look = read(network, at, "emission_color");
+        look.cutout = (masks && look.texture.is_some()).then(|| v.number("alpha_cutoff", 0.5));
+        return Material::Surface(surface, look);
     }
     if node.def.id == VOLUME {
         let offset = node
@@ -318,30 +359,114 @@ pub fn material(network: &MaterialNetwork) -> Material {
         translucency: v.number("translucency", 0.0).clamp(0.0, 1.0),
         translucency_color: v.color("translucency_color", [1.0; 3]),
         unlit: false,
+        texture: None,
     };
-    Material::Surface(surface, attribute)
+    let mut look = read(network, at, "color");
+    let cutout = v.number("cutout", 0.0).clamp(0.0, 1.0);
+    look.cutout = (cutout > 0.0 && look.texture.is_some()).then_some(cutout);
+    look.attribute = attribute.or(look.attribute);
+    Material::Surface(surface, look)
 }
 
-/// The Pixel Surface node holding `values`, alone in a network.
-fn network_of(values: Parameters) -> Option<MaterialNetwork> {
-    let def = Arc::new(surface());
-    let mut built = MaterialNetwork::builder();
-    let at = built.node(&def, &values).ok()?;
-    built.build(at).ok()
+/// What drives input `input` of node `at`: a texture node, read; a
+/// geometric color or property, its attribute.
+fn read(network: &MaterialNetwork, at: NodeIndex, input: &str) -> Look {
+    let Some(from) = driver(network, at, input) else {
+        return Look::default();
+    };
+    let node = &network.nodes()[from as usize];
+    let attribute = match node.def.mtlx().map(|d| d.node.as_str()) {
+        Some("geomcolor") => Some(Arc::from(names::CD)),
+        Some("geompropvalue") => node
+            .values
+            .get("geomprop")
+            .and_then(Value::text)
+            .map(Arc::from),
+        _ => None,
+    };
+    Look {
+        attribute,
+        texture: sampled(network, from),
+        cutout: None,
+    }
+}
+
+/// What drives input `input` of node `at`.
+fn driver(network: &MaterialNetwork, at: NodeIndex, input: &str) -> Option<NodeIndex> {
+    (network.links().iter())
+        .find(|l| l.to == at && &*l.input == input)
+        .map(|l| l.from)
+}
+
+/// Node `at` of `from` and every node driving it, into `built`, each once
+/// (`made` maps them): its index there.
+fn copied(
+    from: &MaterialNetwork,
+    at: NodeIndex,
+    built: &mut NetworkBuilder,
+    made: &mut BTreeMap<NodeIndex, NodeIndex>,
+) -> Option<NodeIndex> {
+    if let Some(&there) = made.get(&at) {
+        return Some(there);
+    }
+    let node = &from.nodes()[at as usize];
+    let there = built.node(&node.def, &node.values).ok()?;
+    for (input, image) in &node.images {
+        built.image(there, input, image.clone()).ok()?;
+    }
+    made.insert(at, there);
+    for l in from.links().iter().filter(|l| l.to == at) {
+        let source = copied(from, l.from, built, made)?;
+        built.link(source, &l.output, there, &l.input).ok()?;
+    }
+    Some(there)
+}
+
+/// Texture node `at` of `from` (and what drives it) copied into `built`,
+/// its color driving input `input` of node `to`.
+fn drive(
+    built: &mut NetworkBuilder,
+    (from, at): (&MaterialNetwork, NodeIndex),
+    (to, input): (NodeIndex, &str),
+) -> Option<()> {
+    let source = copied(from, at, built, &mut BTreeMap::new())?;
+    built.link(source, output(from, at), to, input).ok()
 }
 
 /// Pixel's material rules.
 pub struct Rules;
 
 impl MaterialRules for Rules {
-    /// A surface's color, times the attribute it names; a volume's scatter
-    /// color, filling its shape.
+    /// A surface's color, times the attribute it names and its texture; a
+    /// volume's scatter color, filling its shape.
     fn display(&self, network: &MaterialNetwork) -> MaterialDisplay {
         match material(network) {
-            Material::Surface(s, attribute) => MaterialDisplay {
-                primvar: attribute,
-                ..MaterialDisplay::color(s.color)
-            },
+            Material::Surface(s, look) => {
+                let texture = (look.texture.as_ref()).and_then(|t| {
+                    let mut shown = DisplayTexture::new(t.source.clone()?);
+                    shown.uv = t.uv.clone();
+                    shown.transform = t.transform;
+                    shown.sampling = Sampling {
+                        wrap: t.wrap.map(|w| match w {
+                            Wrap::Repeat => image::Wrap::Repeat,
+                            Wrap::Clamp => image::Wrap::Clamp,
+                            Wrap::Mirror => image::Wrap::MirrorRepeat,
+                            Wrap::Black => image::Wrap::Black,
+                        }),
+                        filter: match t.nearest {
+                            true => image::Filter::Nearest,
+                            false => image::Filter::Smooth,
+                        },
+                    };
+                    Some(shown)
+                });
+                let factor = look.texture.as_ref().map_or([1.0; 4], |t| t.factor);
+                MaterialDisplay {
+                    primvar: look.tint().cloned(),
+                    texture,
+                    ..MaterialDisplay::color([0, 1, 2].map(|k| s.color[k] * factor[k]))
+                }
+            }
             Material::Volume(m) => MaterialDisplay {
                 volume: true,
                 ..MaterialDisplay::color(m.scatter_color)
@@ -349,20 +474,35 @@ impl MaterialRules for Rules {
         }
     }
 
-    /// A Pixel Surface as an OpenPBR Surface of its color; a Pixel Volume
-    /// has none.
+    /// A Pixel Surface as an OpenPBR Surface of its color, its texture
+    /// driving the base color; a Pixel Volume has none.
     fn standard(&self, own: &MaterialNetwork) -> Option<MaterialNetwork> {
         let Material::Surface(surface, _) = material(own) else {
             return None;
         };
         let color = Value::Color(surface.color.map(f64::from));
-        open_pbr(&[("base_color".to_owned(), color)].into()).ok()
+        let values = [("base_color".to_owned(), color)].into();
+        let mut built = MaterialNetwork::builder();
+        let s = built
+            .node(&mtlx::def("ND_open_pbr_surface_surfaceshader")?, &values)
+            .ok()?;
+        let shown = own.surface()?;
+        if let Some(t) = driver(own, shown, "color").filter(|&t| is_texture(own, t)) {
+            drive(&mut built, (own, t), (s, "base_color"))?;
+        }
+        // Shown through a Surface Material, as every standard form is.
+        let m = built
+            .node(&mtlx::def("ND_surfacematerial")?, &Parameters::new())
+            .ok()?;
+        built.link(s, "out", m, "surfaceshader").ok()?;
+        built.build(m).ok()
     }
 
     /// The standard form, an OpenPBR Surface, as Pixel renders it: light
     /// alone (no base, no specular) a Surface Unlit of its emission; else a
-    /// Pixel Surface of its base color, or of white times the attribute a
-    /// geometric color or property drives the base color with.
+    /// Pixel Surface of its base color, of the texture node driving it (and
+    /// cut out at the cutoff its opacity is compared with), or of white
+    /// times the attribute a geometric color or property drives it with.
     fn translate(&self, standard: &MaterialNetwork) -> Option<MaterialNetwork> {
         let at = standard.surface()?;
         let shown = &standard.nodes()[at as usize];
@@ -379,218 +519,53 @@ impl MaterialRules for Rules {
             let at = built.node(&unlit, &values).ok()?;
             return built.build(at).ok();
         }
-        let into = |l: &&Link| l.to == at && &*l.input == "base_color";
-        let read = (standard.links().iter().find(into)).and_then(|l| {
-            let node = &standard.nodes()[l.from as usize];
+        let base = driver(standard, at, "base_color");
+        let read = base.and_then(|b| {
+            let node = &standard.nodes()[b as usize];
             match node.def.mtlx()?.node.as_str() {
                 "geomcolor" => Some("Cd"),
                 "geompropvalue" => node.values.get("geomprop")?.text(),
                 _ => None,
             }
         });
-        let base = match read {
-            Some(_) => [1.0; 3],
-            None => color("base_color")?,
+        let textured = base.filter(|&b| is_texture(standard, b));
+        let white = read.is_some() || textured.is_some();
+        let mut values: Parameters = match white {
+            true => [("color".to_owned(), Value::Color([1.0; 3]))].into(),
+            false => [("color".to_owned(), Value::Color(color("base_color")?))].into(),
         };
-        let mut values: Parameters = [("color".to_owned(), Value::Color(base))].into();
         if let Some(name) = read {
             values.insert("attribute".to_owned(), Value::Text(name.to_owned()));
         }
-        network_of(values)
+        // glTF's mask: the opacity a cutoff compares the alpha with.
+        let cutoff = driver(standard, at, "geometry_opacity").and_then(|o| {
+            let node = &standard.nodes()[o as usize];
+            let compares = node.def.mtlx()?.node == "ifgreatereq";
+            let alpha = driver(standard, o, "value1").is_some();
+            (compares && alpha).then(|| node.values.get("value2")?.number())?
+        });
+        if let (Some(cutoff), Some(_)) = (cutoff, textured) {
+            values.insert("cutout".to_owned(), Value::Number(cutoff));
+        }
+        let mut built = MaterialNetwork::builder();
+        let shown = built.node(&Arc::new(surface()), &values).ok()?;
+        if let Some(t) = textured {
+            drive(&mut built, (standard, t), (shown, "color"))?;
+        }
+        built.build(shown).ok()
+    }
+}
+
+/// The output of texture node `at` that gives its color: `outcolor` of a
+/// glTF color image, else `out`.
+fn output(network: &MaterialNetwork, at: NodeIndex) -> &'static str {
+    let def = network.nodes()[at as usize].def.mtlx();
+    match def.is_some_and(|d| d.node.ends_with("colorimage")) {
+        true => "outcolor",
+        false => "out",
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// OpenPBR Surface's signature.
-    const OPEN_PBR: &str = "ND_open_pbr_surface_surfaceshader";
-
-    fn of(def: NodeDef, values: &[(&str, Value)]) -> MaterialNetwork {
-        let values: Parameters = values
-            .iter()
-            .map(|(n, v)| ((*n).to_owned(), v.clone()))
-            .collect();
-        let mut built = MaterialNetwork::builder();
-        let at = built.node(&Arc::new(def), &values).unwrap();
-        built.build(at).unwrap()
-    }
-
-    #[test]
-    fn a_surface_reads_its_constants_and_its_attribute() {
-        let leaf = of(
-            surface(),
-            &[
-                ("color", Value::Color([0.2, 0.5, 0.1])),
-                ("translucency", Value::Number(0.5)),
-                ("translucency_color", Value::Color([1.0, 0.5, 0.0])),
-            ],
-        );
-        let Material::Surface(s, attribute) = material(&leaf) else {
-            panic!("a surface");
-        };
-        assert_eq!(
-            (s.color, s.transmittance()),
-            ([0.2, 0.5, 0.1], [0.5, 0.25, 0.0])
-        );
-        assert_eq!(attribute.as_deref(), Some("Cd"), "the default attribute");
-        assert_eq!(
-            leaf.primvars().iter().map(|p| &**p).collect::<Vec<_>>(),
-            ["Cd"]
-        );
-        let shown = Rules.display(&leaf);
-        assert_eq!(
-            (shown.color, shown.primvar.as_deref(), shown.volume),
-            ([0.2, 0.5, 0.1], Some("Cd"), false)
-        );
-        assert_eq!(material(&MaterialNetwork::default()), Material::default());
-    }
-
-    #[test]
-    fn a_volume_reads_its_medium_and_shows_as_one() {
-        let mist = of(
-            volume(),
-            &[
-                ("density", Value::Number(0.15)),
-                ("emission", Value::Number(2.0)),
-                ("emission_color", Value::Color([1.0, 0.5, 0.0])),
-                ("noise_octaves", Value::Integer(5)),
-            ],
-        );
-        let Material::Volume(m) = material(&mist) else {
-            panic!("a volume");
-        };
-        assert_eq!(
-            (m.density, m.emission, m.noise_octaves),
-            (0.15, [2.0, 1.0, 0.0], 5)
-        );
-        let shown = Rules.display(&mist);
-        assert!(shown.volume && shown.color == [0.8; 3]);
-    }
-
-    /// `values` by name.
-    fn values(values: &[(&str, Value)]) -> Parameters {
-        (values.iter())
-            .map(|(n, v)| ((*n).to_owned(), v.clone()))
-            .collect()
-    }
-
-    /// A node feeding a surface: its signature, its values and the input
-    /// it feeds.
-    type Fed<'a> = (&'a str, &'a [(&'a str, Value)], &'a str);
-
-    /// MaterialX node `signature` holding `held`, shown by a Surface
-    /// Material, `fed` wired into it.
-    fn shown(signature: &str, held: &[(&str, Value)], fed: Option<Fed<'_>>) -> MaterialNetwork {
-        let mut built = MaterialNetwork::builder();
-        let s = (built.node(&mtlx::def(signature).unwrap(), &values(held))).unwrap();
-        if let Some((by, held, into)) = fed {
-            let n = built.node(&mtlx::def(by).unwrap(), &values(held)).unwrap();
-            built.link(n, "out", s, into).unwrap();
-        }
-        let m = built
-            .node(
-                &mtlx::def("ND_surfacematerial").unwrap(),
-                &Parameters::new(),
-            )
-            .unwrap();
-        built.link(s, "out", m, "surfaceshader").unwrap();
-        built.build(m).unwrap()
-    }
-
-    #[test]
-    fn surface_unlit_is_an_unlit_surface_of_its_emission() {
-        let lamp = shown(
-            "ND_surface_unlit",
-            &[
-                ("emission", Value::Number(2.0)),
-                ("emission_color", Value::Color([0.5, 0.25, 1.0])),
-                ("transmission", Value::Number(0.5)),
-            ],
-            None,
-        );
-        let Material::Surface(s, attribute) = material(&lamp) else {
-            panic!("a surface");
-        };
-        assert!(s.unlit && attribute.is_none());
-        assert_eq!((s.color, s.transmittance()), ([1.0, 0.5, 2.0], [0.5; 3]));
-    }
-
-    #[test]
-    fn the_standard_form_of_light_alone_is_unlit_and_an_attribute_drives_the_color() {
-        let glow = [
-            ("base_weight", Value::Number(0.0)),
-            ("specular_weight", Value::Number(0.0)),
-            ("emission_luminance", Value::Number(1.0)),
-            ("emission_color", Value::Color([0.9, 0.3, 0.1])),
-        ];
-        let glow = Rules.translate(&shown(OPEN_PBR, &glow, None)).unwrap();
-        let Material::Surface(s, _) = material(&glow) else {
-            panic!("a surface");
-        };
-        assert!(s.unlit);
-        assert_eq!(s.color, [0.9, 0.3, 0.1]);
-        let paint = [("geomprop", Value::Text("paint".to_owned()))];
-        let paint = Some(("ND_geompropvalue_color3", &paint[..], "base_color"));
-        let painted = shown(OPEN_PBR, &[], paint);
-        let Material::Surface(s, attribute) = material(&Rules.translate(&painted).unwrap()) else {
-            panic!("a surface");
-        };
-        assert_eq!((s.color, attribute.as_deref()), ([1.0; 3], Some("paint")));
-    }
-
-    #[test]
-    fn materialx_reaches_pixel_as_surface_unlit_or_its_standard_forms_surface() {
-        use kinogaki_render_api::Engines;
-        let pixel = crate::description::description();
-        let engines = Engines::new(vec![pixel.clone()]);
-        // glTF PBR: a Pixel Surface of its standard form's base color.
-        let orange = [("base_color", Value::Color([0.9, 0.5, 0.1]))];
-        let gltf = shown("ND_gltf_pbr_surfaceshader", &orange, None);
-
-        let Material::Surface(s, _) = material(&engines.adopt(&gltf, pixel.id())) else {
-            panic!("a surface");
-        };
-        assert_eq!((s.color, s.unlit), ([0.9, 0.5, 0.1], false));
-        // USD Preview Surface: lit, its diffuse color, its emission and
-        // cutout aside (a Pixel Surface has neither).
-        let leaf = [
-            ("diffuseColor", Value::Color([0.2, 0.6, 0.3])),
-            ("emissiveColor", Value::Color([0.5, 0.5, 0.5])),
-            ("opacityThreshold", Value::Number(0.5)),
-        ];
-        let usd = shown("ND_UsdPreviewSurface_surfaceshader", &leaf, None);
-        let Material::Surface(s, _) = material(&engines.adopt(&usd, pixel.id())) else {
-            panic!("a surface");
-        };
-        assert_eq!((s.color, s.unlit), ([0.2, 0.6, 0.3], false));
-        // Surface Unlit of an image: as it is, the image cut and named.
-        let image = Some(("ND_image_color3", &[][..], "emission_color"));
-        let lamp = engines.adopt(&shown("ND_surface_unlit", &[], image), pixel.id());
-        assert!(matches!(material(&lamp), Material::Surface(s, _) if s.unlit));
-        assert_eq!(lamp.cut(), [std::sync::Arc::from("image")]);
-    }
-
-    #[test]
-    fn a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none() {
-        let color = Value::Color([0.25, 0.5, 0.125]);
-        let mine = of(surface(), &[("color", color.clone())]);
-        let standard = Rules.standard(&mine).unwrap();
-        let shown = &standard.nodes()[standard.surface().unwrap() as usize];
-        assert_eq!(shown.def.mtlx().unwrap().node, "open_pbr_surface");
-        assert_eq!(shown.values["base_color"], color);
-        assert!(Rules.standard(&of(volume(), &[])).is_none());
-    }
-
-    #[test]
-    fn the_standard_form_becomes_a_surface_of_its_base_color() {
-        let color = [("base_color".to_owned(), Value::Color([0.1, 0.2, 0.3]))];
-        let standard = kinogaki_render_api::material::standard::open_pbr(&color.into()).unwrap();
-        let mine = Rules.translate(&standard).unwrap();
-        let Material::Surface(s, _) = material(&mine) else {
-            panic!("a surface");
-        };
-        assert_eq!(s.color, [0.1, 0.2, 0.3]);
-    }
-}
+#[path = "nodes_tests.rs"]
+mod tests;

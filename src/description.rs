@@ -16,15 +16,26 @@ pub fn description() -> EngineDescription {
             PrimKind::Instancer,
             PrimKind::Camera,
             PrimKind::Material,
+            PrimKind::Texture,
         ],
         // Its lights (the standard ones, gobos on distant lights and spots,
         // the rim light) and the standard fog.
         types: [lights::light_types(), vec![standard::fog()]].concat(),
         // Every output, each a film-size plane, asked for by default.
         aovs: Output::ALL.map(|o| AovSpec::new(o.aov(), true)).to_vec(),
-        // MaterialX's Surface Unlit, shown by a Surface Material; any other
-        // material arrives as a Pixel Surface of its standard form.
-        standard_nodes: ["surface_unlit", "surfacematerial"].map(Arc::from).to_vec(),
+        // MaterialX's Surface Unlit (and Kinogaki's Cutout of it), shown by
+        // a Surface Material; the texture nodes it samples, with the
+        // coordinates and colors they read; any other material arrives as a
+        // Pixel Surface of its standard form.
+        standard_nodes: [
+            &["surface_unlit", "kinogaki_surface_unlit", "surfacematerial"][..],
+            &crate::sampled::NODES,
+            &["texcoord", "place2d", "geomcolor", "geompropvalue"],
+        ]
+        .concat()
+        .into_iter()
+        .map(Arc::from)
+        .collect(),
         // Each pass is a whole frame; a pixel-art frame is drawn sharp, with
         // no motion blur.
         realtime: true,

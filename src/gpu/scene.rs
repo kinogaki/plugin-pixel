@@ -3,14 +3,16 @@
 //! (their records and the top-level BVH over them). The scene group every
 //! pass binds as group 1: the meshes' nodes and triangles, the top level's
 //! nodes, the volumes' BVH (nodes, triangles, records), the instances and
-//! the lights. Each part is replaced only when its source changes: a camera
-//! move touches none of it, an object's move the instances alone.
+//! the lights; beside it, the atlas of the pictures surfaces sample, which
+//! the G-buffer reads. Each part is replaced only when its source changes: a
+//! camera move touches none of it, an object's move the instances alone.
 use super::Changed;
+use super::atlas::Atlas;
 use super::kernel::{bind_group, storage};
 use super::records::{GpuInstance, GpuLight, GpuMedium, Vertex};
 use crate::render::bvh::{Bvh, Node, Tlas, Triangle};
 use crate::render::vector::V3;
-use crate::render::{Instance, Mesh, Scene, Surface, Volume};
+use crate::render::{Instance, Mesh, Picture, Scene, Surface, Volume};
 use kinogaki_render_api::display::wgpu;
 use std::ops::Range;
 use std::sync::Arc;
@@ -53,6 +55,7 @@ impl Meshes {
                         position,
                         normal: mesh.normals.as_ref().map_or(face, |n| n[at]),
                         tint: mesh.tints.as_ref().map_or([1.0; 3], |c| c[at]),
+                        uv: mesh.uvs.as_ref().map_or([0.0; 2], |c| c[at]),
                     });
                 }
             }
@@ -95,12 +98,12 @@ pub struct Instances {
 
 impl Instances {
     /// `instances` of `meshes` (as [`Meshes::build`] laid out `bvhs`), with
-    /// the materials `surfaces`.
+    /// the materials `surfaces`, their pictures in `atlas`.
     pub fn build(
         instances: &[Instance],
-        meshes: &Meshes,
-        bvhs: &[Arc<Mesh>],
+        (meshes, bvhs): (&Meshes, &[Arc<Mesh>]),
         surfaces: &[Surface],
+        atlas: &Atlas,
     ) -> Instances {
         let boxes: Vec<_> = (instances.iter())
             .map(|i| world_bounds(&i.to_world, bvhs[i.mesh as usize].bvh.bounds()))
@@ -113,6 +116,7 @@ impl Instances {
                     i,
                     meshes.meshes[i.mesh as usize].1,
                     surface(surfaces, i.surface),
+                    atlas,
                 )
             })
             .collect();
@@ -136,12 +140,42 @@ impl Instances {
         }
     }
 
-    /// The records with the materials `surfaces`.
-    pub fn restyle(&mut self, surfaces: &[Surface]) {
+    /// The records with the materials `surfaces`, their pictures in `atlas`.
+    pub fn restyle(&mut self, surfaces: &[Surface], atlas: &Atlas) {
         for (record, &index) in self.records.iter_mut().zip(&self.surfaces) {
-            record.set_surface(surface(surfaces, index));
+            record.set_surface(surface(surfaces, index), atlas);
         }
     }
+}
+
+/// Whether `a` and `b` are the same pictures, one for one.
+fn same_pictures(a: &[Arc<Picture>], b: &[Arc<Picture>]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
+}
+
+/// `atlas` as a texture of half-float texels.
+fn texels(device: &wgpu::Device, queue: &wgpu::Queue, atlas: &Atlas) -> wgpu::TextureView {
+    let [width, height] = atlas.size;
+    let texture = device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("pixel atlas"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        bytemuck::cast_slice(&atlas.texels),
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// Material `index` of `surfaces`: the default past them.
@@ -250,6 +284,10 @@ pub struct GpuScene {
     meshes: Meshes,
     /// The instances the buffers hold.
     pub instances: Instances,
+    /// The pictures packed, as the atlas holds them.
+    atlas: (Vec<Arc<Picture>>, Atlas),
+    /// The atlas the G-buffer reads texels from.
+    pub texels: wgpu::TextureView,
     /// Volumes rendered, and how many cast shadows.
     pub volumes: (u32, u32),
     /// Lights in the light buffer.
@@ -258,7 +296,7 @@ pub struct GpuScene {
 
 impl GpuScene {
     /// The buffers of an empty scene.
-    pub fn new(device: &wgpu::Device) -> GpuScene {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> GpuScene {
         let stages = wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX_FRAGMENT;
         let entries: Vec<_> = (0..8).map(|b| storage(b, stages)).collect();
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -268,8 +306,11 @@ impl GpuScene {
         let buffers: [wgpu::Buffer; 8] =
             std::array::from_fn(|_| buffer::<[u32; 4]>(device, "pixel empty", &[], STORAGE));
         let meshes = Meshes::build(&[]);
-        let instances = Instances::build(&[], &meshes, &[], &[]);
+        let atlas = Atlas::pack(&[]);
+        let instances = Instances::build(&[], (&meshes, &[]), &[], &atlas);
         let mut made = GpuScene {
+            texels: texels(device, queue, &atlas),
+            atlas: (Vec::new(), atlas),
             vertices: buffer::<Vertex>(device, "pixel vertices", &[], VERTEX),
             drawn: buffer::<u32>(device, "pixel drawn", &[], VERTEX),
             group: Self::bind(device, &layout, &buffers),
@@ -280,12 +321,23 @@ impl GpuScene {
             volumes: (0, 0),
             lights: 0,
         };
-        made.set(device, &Scene::default(), Changed::ALL);
+        made.set((device, queue), &Scene::default(), Changed::ALL);
         made
     }
 
     /// Takes what `changed` says of `scene`.
-    pub fn set(&mut self, device: &wgpu::Device, scene: &Scene, changed: Changed) {
+    pub fn set(
+        &mut self,
+        (device, queue): (&wgpu::Device, &wgpu::Queue),
+        scene: &Scene,
+        changed: Changed,
+    ) {
+        let repacked = changed.surfaces && !same_pictures(&self.atlas.0, &scene.pictures);
+        if repacked {
+            let atlas = Atlas::pack(&scene.pictures);
+            self.texels = texels(device, queue, &atlas);
+            self.atlas = (scene.pictures.clone(), atlas);
+        }
         if changed.meshes {
             let m = Meshes::build(&scene.meshes);
             self.vertices = buffer(device, "pixel vertices", &m.vertices, VERTEX);
@@ -296,16 +348,16 @@ impl GpuScene {
         if changed.meshes || changed.instances {
             let i = Instances::build(
                 &scene.instances,
-                &self.meshes,
-                &scene.meshes,
+                (&self.meshes, &scene.meshes),
                 &scene.surfaces,
+                &self.atlas.1,
             );
             self.drawn = buffer(device, "pixel drawn", &i.drawn, VERTEX);
             self.buffers[TOP] = buffer(device, "pixel top nodes", &i.tlas.nodes, STORAGE);
             self.buffers[INSTANCES] = buffer(device, "pixel instances", &i.records, STORAGE);
             self.instances = i;
         } else if changed.surfaces {
-            self.instances.restyle(&scene.surfaces);
+            self.instances.restyle(&scene.surfaces, &self.atlas.1);
             let records = &self.instances.records;
             self.buffers[INSTANCES] = buffer(device, "pixel instances", records, STORAGE);
         }
@@ -362,7 +414,12 @@ mod tests {
 
     fn quad(z: f32) -> Mesh {
         let [a, b, c, d] = [[0.0, 0.0, z], [1.0, 0.0, z], [1.0, 1.0, z], [0.0, 1.0, z]];
-        Mesh::new(vec![a, b, c, a, c, d], None, Some(vec![[0.5; 3]; 6]))
+        let tints = Some(vec![[0.5; 3]; 6]);
+        let held = crate::render::Corners {
+            tints,
+            ..Default::default()
+        };
+        Mesh::new(vec![a, b, c, a, c, d], held)
     }
 
     /// Placed `dx` along X, in material `surface`.
@@ -406,6 +463,7 @@ mod tests {
                 translucency: 0.5,
                 translucency_color: [1.0, 0.5, 0.0],
                 unlit: false,
+                texture: None,
             },
             crate::render::Surface {
                 unlit: true,
@@ -417,7 +475,7 @@ mod tests {
             instance(0, 2.0, 3),
             instance(1, 4.0, 1),
         ];
-        let i = Instances::build(&placed, &m, &meshes, &surfaces);
+        let i = Instances::build(&placed, (&m, &meshes), &surfaces, &Atlas::pack(&[]));
         // Two draws: mesh 0 once, mesh 1 twice.
         let runs: Vec<_> = i.draws.iter().map(|(v, r)| (v.clone(), r.len())).collect();
         assert_eq!(runs, [(0..6, 1), (6..12, 2)]);

@@ -11,10 +11,13 @@
 //! - **spot**: a sphere seen from outside is a point of radiant intensity
 //!   radiance × π r² (normalized: over its area 4π r²), falling off as 1 /
 //!   max(d², r²), times the cone's falloff.
+use super::atlas::Atlas;
 use crate::render::camera::CameraFrame;
 use crate::render::settings::{MAX_LEVELS, Settings};
 use crate::render::vector::V3;
-use crate::render::{Ambient, Fog, Instance, Light, LightShape, Rims, Surface, Volume, dither};
+use crate::render::{
+    Ambient, Fog, Instance, Light, LightShape, Rims, Surface, Volume, Wrap, dither,
+};
 use bytemuck::{Pod, Zeroable};
 
 /// A G-buffer vertex: one per triangle corner, in its mesh's own space.
@@ -27,6 +30,8 @@ pub struct Vertex {
     pub normal: [f32; 3],
     /// What the material's color is multiplied by.
     pub tint: [f32; 3],
+    /// Its texture coordinates.
+    pub uv: [f32; 2],
 }
 
 /// An instance as the passes read it (`Instance` in common.wgsl): its
@@ -45,27 +50,75 @@ pub struct GpuInstance {
     pub transmit: [f32; 4],
     /// x: the object id; y: its mesh's BVH root node.
     pub id: [u32; 4],
+    /// Its texture's picture in the atlas: x, y its corner; z its width and
+    /// height (16 bits each); w the flags ([`TEXTURED`], [`NEAREST`], each
+    /// axis's wrap, [`CUTOUT`]).
+    pub texture: [u32; 4],
+    /// The texture's transform's first row; w: the cutout's alpha.
+    pub uv_s: [f32; 4],
+    /// Its second row.
+    pub uv_t: [f32; 4],
+    /// What a texel is multiplied by.
+    pub factor: [f32; 4],
+    /// rgb: the albedo a ray bouncing off it sees, its color × its
+    /// texture's mean.
+    pub mean: [f32; 4],
 }
+
+/// Texture flags (`texture.w`): it samples one; the nearest texel; wraps
+/// at [`WRAP_S`] and [`WRAP_T`] (two bits each: repeat, clamp, mirror,
+/// black); a cutout.
+pub const TEXTURED: u32 = 1;
+pub const NEAREST: u32 = 2;
+pub const WRAP_S: u32 = 2;
+pub const WRAP_T: u32 = 4;
+pub const CUTOUT: u32 = 64;
 
 impl GpuInstance {
     /// `instance` packed, its mesh's BVH rooted at node `root`, shading as
-    /// `surface`.
-    pub fn of(instance: &Instance, root: u32, surface: Surface) -> GpuInstance {
+    /// `surface` (its picture placed in `atlas`).
+    pub fn of(instance: &Instance, root: u32, surface: Surface, atlas: &Atlas) -> GpuInstance {
         let mut packed = GpuInstance {
             to_world: instance.to_world,
             to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
             id: [instance.id, root, 0, 0],
             ..GpuInstance::default()
         };
-        packed.set_surface(surface);
+        packed.set_surface(surface, atlas);
         packed
     }
 
-    /// Shades as `surface`; an unlit one's transmittance carries 1 in w.
-    pub fn set_surface(&mut self, surface: Surface) {
+    /// Shades as `surface`, its picture placed in `atlas`; an unlit one's
+    /// transmittance carries 1 in w.
+    pub fn set_surface(&mut self, surface: Surface, atlas: &Atlas) {
         self.albedo = V3::of(surface.color).with_w(0.0);
         let unlit = f32::from(u8::from(surface.unlit));
         self.transmit = V3::of(surface.transmittance()).with_w(unlit);
+        self.mean = self.albedo;
+        self.texture = [0; 4];
+        let Some((t, (at, size, mean))) = (surface.texture)
+            .and_then(|t| Some((t, atlas.placed.get(t.picture as usize).copied()?)))
+        else {
+            return;
+        };
+        let wrap = |w: Wrap| match w {
+            Wrap::Repeat => 0,
+            Wrap::Clamp => 1,
+            Wrap::Mirror => 2,
+            Wrap::Black => 3,
+        };
+        let flags = TEXTURED
+            | if t.nearest { NEAREST } else { 0 }
+            | wrap(t.wrap[0]) << WRAP_S
+            | wrap(t.wrap[1]) << WRAP_T
+            | if t.cutout.is_some() { CUTOUT } else { 0 };
+        self.texture = [at[0], at[1], size[0] | size[1] << 16, flags];
+        let [s, r] = t.transform;
+        self.uv_s = [s[0], s[1], s[2], t.cutout.unwrap_or(0.0)];
+        self.uv_t = [r[0], r[1], r[2], 0.0];
+        self.factor = t.factor;
+        let seen: [f32; 3] = std::array::from_fn(|k| surface.color[k] * t.factor[k] * mean[k]);
+        self.mean = V3::of(seen).with_w(0.0);
     }
 }
 
