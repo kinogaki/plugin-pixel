@@ -48,7 +48,7 @@ use crate::render::{
     Texture, Volume,
 };
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
-use kinogaki_render_api::standard::{self, Shape as LightKind};
+use kinogaki_render_api::standard::{self, LightShape as LightKind};
 use kinogaki_render_api::{
     Dirty, Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
 };

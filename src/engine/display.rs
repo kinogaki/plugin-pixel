@@ -8,14 +8,13 @@
 //! shown frame is never overwritten; three images a view leave one to write
 //! while one is shown and the newest waits. A pin let go wakes the render
 //! thread, which may have a frame waiting for an image.
-use super::{Message, Own};
+use super::{Message, Own, lock};
 use crate::gpu::Image;
 use crate::outputs::Output;
 use crate::render::film::Film;
 use kinogaki_render_api::display::{self, Display, Shown};
 use kinogaki_render_api::geometry::image::{self, metadata};
 use kinogaki_render_api::geometry::{Attribute, Domain, Meaning};
-use kinogaki_render_api::thread::lock;
 use kinogaki_render_api::{Aov, Frame, ViewId};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};

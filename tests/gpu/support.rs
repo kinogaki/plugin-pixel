@@ -5,7 +5,7 @@ use kinogaki_pixel::engine::Pixel;
 use kinogaki_pixel::nodes::SURFACE;
 use kinogaki_render_api::display::{Display, Engine, Options, wgpu};
 use kinogaki_render_api::geometry::{Column, Sampled, Vec3, Xform};
-use kinogaki_render_api::standard::{Light, Shape as LightShape};
+use kinogaki_render_api::standard::{Light, LightShape};
 use kinogaki_render_api::value::{Parameters, Value};
 use kinogaki_render_api::{
     Camera, Id, Material, MaterialNetwork, Prim, PrimId, RenderEngine, SceneUpdate, Shape, Subsets,

@@ -2,6 +2,7 @@
 //! needs a frame into a free display image, publishes it once the GPU has
 //! finished it, and answers final reads and previews.
 use super::display::{IMAGES, Ring, Shared, image_key};
+use super::lock;
 use super::readings::answer;
 use super::{Message, Own};
 use crate::gpu::{Caught, Image, Renderer, Viewport, readback};
@@ -11,7 +12,7 @@ use crate::render::settings::Settings;
 use crate::sync::Sync;
 use kinogaki_render_api::display::wgpu;
 use kinogaki_render_api::geometry::{Diagnostic, Error};
-use kinogaki_render_api::thread::{Mailbox, PREVIEW, Published, Reading, lock};
+use kinogaki_render_api::thread::{Mailbox, PREVIEW, Published, Reading};
 use kinogaki_render_api::{Frame, RenderStats, SceneUpdate, ViewDesc, ViewId, Wake};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;

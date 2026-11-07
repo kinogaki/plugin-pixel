@@ -7,7 +7,9 @@ use kinogaki_pixel::gpu::Renderer;
 use kinogaki_pixel::sync::Sync;
 use kinogaki_render_api::display::wgpu;
 use kinogaki_render_api::geometry::{Column, Sampled, Vec3, Xform};
-use kinogaki_render_api::{Change, Dirty, Instancer, Prim, PrimId, SceneUpdate, Shape, Topology};
+use kinogaki_render_api::{
+    Dirty, Instancer, Prim, PrimChange, PrimId, SceneUpdate, Shape, Topology,
+};
 use kinogaki_studio_api_testing::engine;
 use std::time::{Duration, Instant};
 
@@ -71,7 +73,7 @@ fn hand_run_a_moved_object_beside_many_instances() {
     for step in 1..=5 {
         let at = Xform::translation(Vec3::new(0.0, f64::from(step), 0.0));
         let moved = SceneUpdate {
-            changed: vec![Change::new(
+            changed: vec![PrimChange::new(
                 id(2),
                 Dirty::TRANSFORM,
                 Prim::Shape(grid(4, at)),
@@ -118,7 +120,7 @@ fn a_deform_writes_its_mesh_in_place() {
         .collect();
     let moved = (small.rebuilt().points(points.into()).build()).expect("a grid");
     let update = SceneUpdate {
-        changed: vec![Change::new(id(1), Dirty::POINTS, Prim::Shape(moved))],
+        changed: vec![PrimChange::new(id(1), Dirty::POINTS, Prim::Shape(moved))],
         ..SceneUpdate::new()
     };
     uploaded(&mut renderer, &mut sync, update);
@@ -161,7 +163,7 @@ fn hand_run_a_small_deform_beside_a_large_scene() {
             .build()
             .expect("a grid");
         let update = SceneUpdate {
-            changed: vec![Change::new(id(1), Dirty::POINTS, Prim::Shape(moved))],
+            changed: vec![PrimChange::new(id(1), Dirty::POINTS, Prim::Shape(moved))],
             ..SceneUpdate::new()
         };
         steps.push(uploaded(&mut renderer, &mut sync, update));

@@ -11,8 +11,8 @@ use kinogaki_render_api::geometry::{Attribute, Domain, Meaning, Vec3, names};
 use kinogaki_render_api::standard::{Light, Shape as LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
-    AovDesc, AovFormat, Change, Dirty, PreviewLighting, PreviewRequest, PreviewShape, Prim, PrimId,
-    SceneUpdate, ViewDesc, ViewId,
+    AovDesc, AovFormat, Dirty, PreviewLighting, PreviewRequest, PreviewShape, Prim, PrimChange,
+    PrimId, SceneUpdate, ViewDesc, ViewId,
 };
 use std::sync::Arc;
 
@@ -59,7 +59,7 @@ fn the_light_falls_on_the_shade_levels() {
         },
         ..Light::default()
     };
-    let white = Change::new(
+    let white = PrimChange::new(
         PrimId {
             slot: 5,
             generation: 0,
@@ -129,7 +129,7 @@ fn a_new_color_renders_again_and_views_share_the_scene() {
     });
     let before = engine.latest(ViewId(1)).unwrap();
     let blue = SceneUpdate {
-        changed: vec![Change::new(
+        changed: vec![PrimChange::new(
             PrimId {
                 slot: 1,
                 generation: 0,
@@ -184,7 +184,7 @@ fn a_camera_moved_renders_the_view_through_it_alone() {
     });
     let shown = [ViewId(1), ViewId(2)].map(|v| engine.latest(v).unwrap().generation);
     engine.update(SceneUpdate {
-        changed: vec![Change::new(
+        changed: vec![PrimChange::new(
             lens.prim(),
             Dirty::TRANSFORM,
             Prim::Camera(camera(Vec3::new(6.0, 3.0, 4.0))),
@@ -221,7 +221,7 @@ fn a_deformed_shape_renders_where_its_points_moved() {
         let moved = (held.rebuilt().points(points.into()).build()).expect("the box");
         let was = engine.latest(ViewId(1)).unwrap().generation;
         engine.update(SceneUpdate {
-            changed: vec![Change::new(box_id, Dirty::POINTS, Prim::Shape(moved))],
+            changed: vec![PrimChange::new(box_id, Dirty::POINTS, Prim::Shape(moved))],
             ..SceneUpdate::new()
         });
         waiter.until(LIMIT, || {

@@ -26,7 +26,7 @@ use kinogaki_render_api::display::{Engine, Made, Options, wgpu};
 use kinogaki_render_api::geometry::Error;
 use kinogaki_render_api::thread::EngineThread;
 use kinogaki_render_api::{EngineDescription, ViewId, Wake};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// What Pixel's display tells its render thread besides a host's calls.
 pub(crate) enum Own {
@@ -73,4 +73,9 @@ impl Engine for Pixel {
         };
         Ok((Box::new(engine), Box::new(display)))
     }
+}
+
+/// `mutex` locked, whatever a panic left in it.
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

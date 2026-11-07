@@ -30,8 +30,8 @@ use kinogaki_render_api::geometry::names;
 use kinogaki_render_api::material::mtlx;
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
-    DisplayTexture, Input, MaterialDisplay, MaterialNetwork, MaterialRules, NetworkBuilder,
-    NodeDef, NodeIndex, Parameter, Section, Socket,
+    DisplayTexture, MaterialDisplay, MaterialNetwork, MaterialRules, NetworkBuilder, NodeDef,
+    NodeIndex, NodeInput, Parameter, Section, Socket,
 };
 use kinogaki_studio_api::NodeTypeId;
 use std::collections::BTreeMap;
@@ -57,8 +57,8 @@ fn value(
     group: &str,
     kind: ValueKind,
     default: impl Into<Value>,
-) -> Input {
-    Input::Setting(Parameter::new(name, label, kind, default).group(group))
+) -> NodeInput {
+    NodeInput::Setting(Parameter::new(name, label, kind, default).group(group))
 }
 
 /// A slider over `min..=max` dragged over `soft`, with `decimals`.
@@ -67,11 +67,11 @@ fn slider(min: f64, max: f64, soft: (f64, f64)) -> ValueKind {
 }
 
 /// `input` with `tooltip`, shown `decimals` places when a number.
-fn tip(input: Input, tooltip: &str, decimals: u8) -> Input {
+fn tip(input: NodeInput, tooltip: &str, decimals: u8) -> NodeInput {
     match input {
-        Input::Setting(d) => {
+        NodeInput::Setting(d) => {
             let look = NumberLook::slider().decimals(decimals).speed(0.01);
-            Input::Setting(d.help(tooltip).look(look))
+            NodeInput::Setting(d.help(tooltip).look(look))
         }
         other => other,
     }
@@ -81,7 +81,7 @@ fn tip(input: Input, tooltip: &str, decimals: u8) -> Input {
 fn surface() -> NodeDef {
     let color = Parameter::new("color", "Color", ValueKind::Color, [0.8; 3]).group(MAIN);
     let mut def = NodeDef::new(SURFACE, "Pixel Surface", "Surface")
-        .input(Input::Driven(color, Socket::Color3))
+        .input(NodeInput::Driven(color, Socket::Color3))
         .input(tip(
             value(
                 "attribute",

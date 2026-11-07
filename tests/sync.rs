@@ -7,11 +7,11 @@ use kinogaki_pixel::sync::Sync;
 use kinogaki_render_api::geometry::{
     Attribute, Column, Domain, Meaning, Sampled, Vec3, Xform, names,
 };
-use kinogaki_render_api::standard::{self, Light, Shape as LightShape};
+use kinogaki_render_api::standard::{self, Light, LightShape};
 use kinogaki_render_api::value::{Parameters, Value};
 use kinogaki_render_api::{
-    Change, Declared, Dirty, Id, Instancer, Material, MaterialNetwork, Prim, PrimId, SceneUpdate,
-    Shape, Subsets, Topology,
+    Declared, Dirty, Id, Instancer, Material, MaterialNetwork, Prim, PrimChange, PrimId,
+    SceneUpdate, Shape, Subsets, Topology,
 };
 use std::sync::Arc;
 
@@ -139,7 +139,11 @@ fn materials_and_visibility_remake_only_what_they_change() {
         let visibility = kinogaki_render_api::Visibility::of(shown);
         let shape = shape.visibility(visibility).build().unwrap();
         SceneUpdate {
-            changed: vec![Change::new(id(2), Dirty::VISIBILITY, Prim::Shape(shape))],
+            changed: vec![PrimChange::new(
+                id(2),
+                Dirty::VISIBILITY,
+                Prim::Shape(shape),
+            )],
             ..SceneUpdate::new()
         }
     };
@@ -171,7 +175,7 @@ fn a_moved_shape_keeps_its_mesh() {
     sync.apply(added(vec![(id(0), Prim::Shape(shape(0.0)))]));
     let before = sync.scene().meshes[0].clone();
     let moved = SceneUpdate {
-        changed: vec![Change::new(
+        changed: vec![PrimChange::new(
             id(0),
             Dirty::TRANSFORM,
             Prim::Shape(shape(2.0)),
@@ -183,7 +187,11 @@ fn a_moved_shape_keeps_its_mesh() {
     assert!(Arc::ptr_eq(&before, &sync.scene().meshes[0]));
     assert!(placed(sync.scene(), 0).iter().all(|p| p[2] == 2.0));
     let reshaped = SceneUpdate {
-        changed: vec![Change::new(id(0), Dirty::POINTS, Prim::Shape(shape(2.0)))],
+        changed: vec![PrimChange::new(
+            id(0),
+            Dirty::POINTS,
+            Prim::Shape(shape(2.0)),
+        )],
         ..SceneUpdate::new()
     };
     assert!(sync.apply(reshaped).meshes);
@@ -200,7 +208,7 @@ fn a_new_color_rewrites_the_object_table_alone() {
     ]));
     let blue = material(SURFACE, &[("color", Value::Color([0.0, 0.0, 1.0]))]);
     let update = SceneUpdate {
-        changed: vec![Change::new(id(0), Dirty::PARAMS, blue)],
+        changed: vec![PrimChange::new(id(0), Dirty::PARAMS, blue)],
         ..SceneUpdate::new()
     };
     let changed = sync.apply(update);
@@ -227,7 +235,7 @@ fn a_volume_material_makes_its_shape_a_volume_never_drawn() {
     // A new density restyles it without walking the shapes.
     let denser = material(VOLUME, &[("density", Value::Number(3.0))]);
     let update = SceneUpdate {
-        changed: vec![Change::new(id(0), Dirty::PARAMS, denser)],
+        changed: vec![PrimChange::new(id(0), Dirty::PARAMS, denser)],
         ..SceneUpdate::new()
     };
     let changed = sync.apply(update);
@@ -458,7 +466,7 @@ fn a_cycle_of_instancers_places_nothing_and_says_so() {
     );
     assert!(sync.problems().is_empty());
     // Instancer 1 now places 3, which places 2, which places 1.
-    let change = Change::new(id(1), Dirty::ALL, Prim::Instancer(instancer(id(3))));
+    let change = PrimChange::new(id(1), Dirty::ALL, Prim::Instancer(instancer(id(3))));
     sync.apply(SceneUpdate {
         changed: vec![change],
         ..SceneUpdate::new()
@@ -555,7 +563,7 @@ fn a_texture_samples_its_prims_picture_at_each_corners_coordinates() {
         .expect("the corners' coordinates");
     assert_eq!(uvs[..3], [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]]);
     // A new picture in the prim is read again.
-    let change = Change::new(
+    let change = PrimChange::new(
         id(2),
         Dirty::ALL,
         self::picture([0.0, 1.0, 0.0, 1.0], [0.0; 4]),

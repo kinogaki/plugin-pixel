@@ -6,7 +6,7 @@
 use super::support::{LIMIT, id, pixel, scene, view};
 use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::geometry::{Column, Sampled, Vec3, Xform};
-use kinogaki_render_api::standard::{self, Light, Shape as LightShape};
+use kinogaki_render_api::standard::{self, Light, LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
     AovDesc, AovFormat, Declared, Instancer, Prim, RenderEngine, SceneUpdate, Shape, Topology,
