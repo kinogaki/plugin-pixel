@@ -1,7 +1,8 @@
 //! Pixel as a host drives it, on the GPU: a frame a change and none at rest,
 //! one wake a frame, the grid locked to the view, the shade levels, an unlit
-//! surface, a material's new color, views sharing a scene, final outputs,
-//! previews, the film a compositor reads, and a dropped read.
+//! surface, a material's new color, views sharing a scene, a camera moved,
+//! a deformed shape, final outputs, previews, the film a compositor reads, and a
+//! dropped read.
 use super::support::{LIMIT, at, pixel, scene, surface, unlit, view};
 use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::display::Texture;
@@ -11,7 +12,7 @@ use kinogaki_render_api::standard::{Light, Shape as LightShape};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
     AovDesc, AovFormat, Change, Dirty, PreviewLighting, PreviewRequest, PreviewShape, Prim, PrimId,
-    SceneUpdate, ViewId,
+    SceneUpdate, ViewDesc, ViewId,
 };
 use std::sync::Arc;
 
@@ -151,6 +152,90 @@ fn a_new_color_renders_again_and_views_share_the_scene() {
     assert!(was[0] > was[2] && now[2] > now[0], "{was:?} then {now:?}");
     engine.drop_view(ViewId(2));
     assert!(engine.latest(ViewId(2)).is_none());
+}
+
+/// A camera prim moved renders again the view looking through it alone:
+/// the other view, whose scene didn't change, renders no frame.
+#[test]
+#[ignore = "gpu"]
+fn a_camera_moved_renders_the_view_through_it_alone() {
+    use kinogaki_render_api::geometry::Sampled;
+    use kinogaki_render_api::{Camera, Id, ViewCamera};
+    let (mut engine, _display, waiter, _device) = pixel();
+    let camera = |eye: Vec3| Camera {
+        xform: Sampled::still(super::support::look(eye, Vec3::new(0.0, 0.75, 0.0))),
+        ..Camera::default()
+    };
+    let lens: Id<Camera> = Id::of(PrimId {
+        slot: 9,
+        generation: 0,
+    });
+    let mut first = scene();
+    first.added.push((lens.prim(), Prim::Camera(camera(eye()))));
+    engine.update(first);
+    let through = ViewDesc {
+        camera: ViewCamera::Prim(lens),
+        ..view(32, 32, eye(), &[])
+    };
+    engine.view(ViewId(1), through);
+    engine.view(ViewId(2), view(32, 32, Vec3::new(-5.0, 2.0, 2.0), &[]));
+    waiter.until(LIMIT, || {
+        engine.latest(ViewId(1)).is_some() && engine.latest(ViewId(2)).is_some()
+    });
+    let shown = [ViewId(1), ViewId(2)].map(|v| engine.latest(v).unwrap().generation);
+    engine.update(SceneUpdate {
+        changed: vec![Change::new(
+            lens.prim(),
+            Dirty::TRANSFORM,
+            Prim::Camera(camera(Vec3::new(6.0, 3.0, 4.0))),
+        )],
+        ..SceneUpdate::new()
+    });
+    waiter.until(LIMIT, || {
+        engine
+            .latest(ViewId(1))
+            .is_some_and(|f| f.generation > shown[0])
+    });
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let other = engine.latest(ViewId(2)).unwrap().generation;
+    assert_eq!(other, shown[1], "the free view renders nothing again");
+}
+
+/// The box's points moved up out of the middle and back, each a POINTS
+/// change the meshes take in place: it renders where its points are.
+#[test]
+#[ignore = "gpu"]
+fn a_deformed_shape_renders_where_its_points_moved() {
+    let (mut engine, _display, waiter, _device) = pixel();
+    let scene = scene();
+    let (box_id, Prim::Shape(held)) = scene.added[3].clone() else {
+        panic!("the box");
+    };
+    engine.update(scene);
+    engine.view(ViewId(1), view(64, 48, eye(), &[]));
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
+    let mut middle = |lift: f32| {
+        let points: Vec<[f32; 3]> = (held.points().iter())
+            .map(|p| [p[0], p[1] + lift, p[2]])
+            .collect();
+        let moved = (held.rebuilt().points(points.into()).build()).expect("the box");
+        let was = engine.latest(ViewId(1)).unwrap().generation;
+        engine.update(SceneUpdate {
+            changed: vec![Change::new(box_id, Dirty::POINTS, Prim::Shape(moved))],
+            ..SceneUpdate::new()
+        });
+        waiter.until(LIMIT, || {
+            engine.latest(ViewId(1)).is_some_and(|f| f.generation > was)
+        });
+        at(&engine.latest(ViewId(1)).unwrap(), 32, 26)
+    };
+    let away = middle(20.0);
+    assert!(
+        away[0] < away[2] * 2.0,
+        "the box gone from the middle: {away:?}"
+    );
+    let back = middle(0.0);
+    assert!(back[0] > back[1] * 2.0, "the box back: {back:?}");
 }
 
 #[test]

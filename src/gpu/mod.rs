@@ -18,6 +18,7 @@ use kinogaki_render_api::display::wgpu;
 mod atlas;
 mod budget;
 mod kernel;
+mod meshes;
 mod passes;
 pub mod readback;
 mod records;
@@ -133,6 +134,12 @@ impl Renderer {
         self.generation += u64::from(changed.any());
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
         set
+    }
+
+    /// How many times the meshes were laid out whole: a mesh made again
+    /// that fits its runs is written there instead (tests and counters).
+    pub fn layouts(&self) -> u64 {
+        self.scene.layouts
     }
 
     /// Whether `film`'s textures, at the film's size and the view's, fit

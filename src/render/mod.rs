@@ -141,6 +141,9 @@ pub struct Instance {
     /// What stands for its mesh's corners' tint: its instance's own value of
     /// the attribute its material reads (none: the corners').
     pub tint: Option<[f32; 3]>,
+    /// What stands for its mesh's corners' alpha, likewise: its instance's
+    /// own value of the alpha attribute its material reads.
+    pub alpha: Option<f32>,
 }
 
 /// A Pixel Surface as a frame shades it.

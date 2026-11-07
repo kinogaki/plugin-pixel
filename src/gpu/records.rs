@@ -49,7 +49,8 @@ pub struct GpuInstance {
     pub albedo: [f32; 4],
     /// rgb: what it lets through.
     pub transmit: [f32; 4],
-    /// x: the object id; y: its mesh's BVH root node.
+    /// x: the object id; y: its mesh's BVH root node; z: what of `tint`
+    /// stands for its corners' ([`OWN_COLOR`], [`OWN_ALPHA`]).
     pub id: [u32; 4],
     /// Its texture's picture in the atlas: x, y its corner; z its width and
     /// height (16 bits each); w the flags ([`TEXTURED`], [`NEAREST`], each
@@ -64,9 +65,14 @@ pub struct GpuInstance {
     /// rgb: the albedo a ray bouncing off it sees, its color × its
     /// texture's mean.
     pub mean: [f32; 4],
-    /// rgb: what stands for its mesh's corners' tint; w: 1 where it does.
+    /// rgb: what stands for its mesh's corners' tint; w: their alpha.
     pub tint: [f32; 4],
 }
+
+/// Its own color stands for its corners' tint (`id.z`).
+pub const OWN_COLOR: u32 = 1;
+/// Its own alpha stands for its corners' (`id.z`).
+pub const OWN_ALPHA: u32 = 2;
 
 /// Texture flags (`texture.w`): it samples one; the nearest texel; wraps
 /// at [`WRAP_S`] and [`WRAP_T`] (two bits each: repeat, clamp, mirror,
@@ -81,11 +87,13 @@ impl GpuInstance {
     /// `instance` packed, its mesh's BVH rooted at node `root`, shading as
     /// `surface` (its picture placed in `atlas`).
     pub fn of(instance: &Instance, root: u32, surface: Surface, atlas: &Atlas) -> GpuInstance {
+        let own = u32::from(instance.tint.is_some()) * OWN_COLOR
+            + u32::from(instance.alpha.is_some()) * OWN_ALPHA;
         let mut packed = GpuInstance {
             to_world: instance.to_world,
             to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
-            id: [instance.id, root, 0, 0],
-            tint: instance.tint.map_or([0.0; 4], |t| V3::of(t).with_w(1.0)),
+            id: [instance.id, root, own, 0],
+            tint: V3::of(instance.tint.unwrap_or_default()).with_w(instance.alpha.unwrap_or(1.0)),
             ..GpuInstance::default()
         };
         packed.set_surface(surface, atlas);

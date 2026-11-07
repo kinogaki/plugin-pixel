@@ -115,6 +115,50 @@ fn a_shape_is_a_world_space_mesh_tinted_by_its_material_attribute() {
 
 /// A move remakes the instances alone: the mesh is the one made before. A
 /// new point remakes it.
+/// A material coming or going keeps the meshes it doesn't color, and their
+/// instances take the surfaces' new indices; a hidden shape keeps its mesh
+/// through being shown again.
+#[test]
+fn materials_and_visibility_remake_only_what_they_change() {
+    let mut sync = Sync::default();
+    let color = |c: [f64; 3]| material(SURFACE, &[("color", Value::Color(c))]);
+    sync.apply(added(vec![
+        (id(1), color([0.0, 1.0, 0.0])),
+        (id(2), Prim::Shape(square(Some(id(1)), [1.0; 3]))),
+    ]));
+    let held = sync.scene().meshes[0].clone();
+    let surface = |sync: &Sync| sync.scene().instances[0].surface as usize;
+    // A material before it in index order: the green surface moves along.
+    let changed = sync.apply(added(vec![(id(0), color([1.0, 0.0, 0.0]))]));
+    assert!(changed.instances && !changed.meshes);
+    assert!(Arc::ptr_eq(&held, &sync.scene().meshes[0]), "the mesh kept");
+    let green = sync.scene().surfaces[surface(&sync)].color;
+    assert_eq!(green, [0.0, 1.0, 0.0]);
+    let hidden = |shown: bool| {
+        let shape = square(Some(id(1)), [1.0; 3]).rebuilt();
+        let visibility = kinogaki_render_api::Visibility::of(shown);
+        let shape = shape.visibility(visibility).build().unwrap();
+        SceneUpdate {
+            changed: vec![Change::new(id(2), Dirty::VISIBILITY, Prim::Shape(shape))],
+            ..SceneUpdate::new()
+        }
+    };
+    sync.apply(hidden(false));
+    assert!(sync.scene().meshes.is_empty(), "hidden");
+    sync.apply(hidden(true));
+    assert!(
+        Arc::ptr_eq(&held, &sync.scene().meshes[0]),
+        "shown with its mesh"
+    );
+    // The green one gone: its shape takes the default, a mesh made anew.
+    let gone = SceneUpdate {
+        removed: vec![id(1)],
+        ..SceneUpdate::new()
+    };
+    sync.apply(gone);
+    assert!(!Arc::ptr_eq(&held, &sync.scene().meshes[0]));
+}
+
 #[test]
 fn a_moved_shape_keeps_its_mesh() {
     let mut sync = Sync::default();
@@ -503,8 +547,9 @@ fn a_texture_of_data_keeps_its_values() {
 
 /// glTF's color image with vertex colors: its alpha times the mesh's
 /// `Alpha` (opaque where the mesh has none) rides with each corner's tint.
-#[test]
-fn a_gltf_color_image_reads_the_vertex_alpha() {
+/// A Pixel Surface colored by a glTF color image (texture prim `id(2)`)
+/// whose vertex alpha is the mesh's `Alpha`.
+fn gltf_material() -> Prim {
     use kinogaki_render_api::geometry::image::ImageSource;
     use kinogaki_render_api::material::mtlx::def;
     let description = kinogaki_pixel::description::description();
@@ -528,11 +573,16 @@ fn a_gltf_color_image_reads_the_vertex_alpha() {
     network.nodes_mut()[image as usize]
         .textures
         .insert("file".to_owned(), Id::of(id(2)));
-    let material = Prim::Material(Material {
+    Prim::Material(Material {
         network: Arc::new(network),
         path: Arc::from("/m"),
         double_sided: true,
-    });
+    })
+}
+
+#[test]
+fn a_gltf_color_image_reads_the_vertex_alpha() {
+    let material = gltf_material();
     let alpha = Attribute::tuples(vec![0.25f32; 4], Meaning::None).unwrap();
     let faded = (square(Some(id(0)), [0.5; 3]).rebuilt())
         .primvar(Domain::Point, names::ALPHA, alpha)
@@ -551,4 +601,35 @@ fn a_gltf_color_image_reads_the_vertex_alpha() {
         let tints = sync.scene().meshes[0].tints.clone();
         assert_eq!(tints.map(|t| t[0]), Some(expected));
     }
+}
+
+/// An instance's own `Alpha` stands for its mesh's vertex alpha, as its own
+/// `Cd` stands for its tint; one holding none keeps its mesh's.
+#[test]
+fn an_instances_own_alpha_is_its_own() {
+    let row = |x: f64| Xform::translation(Vec3::new(x, 0.0, 0.0));
+    let alphas = Attribute::tuples(vec![0.5f32, 0.75], Meaning::None).unwrap();
+    let own = (kinogaki_render_api::geometry::Attributes::new())
+        .with(Domain::Instance, names::ALPHA, alphas)
+        .unwrap();
+    let held = Instancer::builder(vec![id(1)], vec![row(0.0), row(2.0)].into())
+        .primvars(own)
+        .build()
+        .unwrap();
+    let bare = Instancer::builder(vec![id(1)], vec![row(4.0)].into())
+        .build()
+        .unwrap();
+    let mut sync = Sync::default();
+    sync.apply(added(vec![
+        (id(0), gltf_material()),
+        (id(1), Prim::Shape(square(Some(id(0)), [0.5; 3]))),
+        (id(2), picture([1.0; 4], [1.0; 4])),
+        (id(3), Prim::Instancer(held)),
+        (id(4), Prim::Instancer(bare)),
+    ]));
+    let mut seen: Vec<(u32, Option<f32>)> = (sync.scene().instances.iter())
+        .map(|i| (i.id, i.alpha))
+        .collect();
+    seen.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    assert_eq!(seen, [(1, None), (1, Some(0.5)), (2, Some(0.75))]);
 }

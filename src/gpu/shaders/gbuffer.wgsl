@@ -121,11 +121,12 @@ fn fs(v: VertexOut) -> Targets {
         n = -n;
     }
     let picture = textured(object, v.uv);
-    if (object.texture.w & 64u) != 0u && picture.a * v.tint.a < object.uv_s.w {
+    let tint = tinted(object, v.tint);
+    if (object.texture.w & 64u) != 0u && picture.a * tint.a < object.uv_s.w {
         discard;
     }
     var out: Targets;
-    out.albedo = vec4<f32>(object.albedo.rgb * tinted(object, v.tint.rgb) * picture.rgb, 1.0);
+    out.albedo = vec4<f32>(object.albedo.rgb * tint.rgb * picture.rgb, 1.0);
     out.normal = vec4<f32>(n, 0.0);
     out.depth = dot(v.world - frame.eye.xyz, -frame.back.xyz);
     out.id = object.id.x;

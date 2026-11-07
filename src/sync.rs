@@ -10,7 +10,8 @@
 //!   (meshes of their own, kept likewise). An instance's own primvars (its
 //!   Instancer's, else an outer one's) give its object id (`id`, else its
 //!   index + 1) and the color its material's attribute reads, which stands
-//!   for its mesh's tint. Every placement of a mesh is an
+//!   for its mesh's tint, and the alpha it reads, which stands for its
+//!   mesh's alpha. Every placement of a mesh is an
 //!   instance, so a move remakes the instances alone. Triangles whose
 //!   material is a Pixel Volume become that volume's bounds instead, in
 //!   world space, and are not drawn. A material's color attribute becomes
@@ -21,16 +22,17 @@
 //! - **Materials** become surfaces and media ([`nodes::material`]); a
 //!   surface's texture samples the picture its Texture prim holds (linear
 //!   ACEScg, made straight where the host premultiplied it, its longer side
-//!   at most [`MAX_PICTURE`] texels:
-//!   halved until it is), each corner reading the coordinates its primvar
-//!   holds.
+//!   at most [`MAX_PICTURE`](pictures::MAX_PICTURE) texels: [`pictures`]), each corner reading the
+//!   coordinates its primvar holds.
 //! - **Declared prims** become lights: the domes add up into the ambient
 //!   light (a ground color below the horizon), the rims by their side, the
 //!   first visible fog is the fog.
 //!
 //! A material's new colors rewrite the instances' surfaces alone; a new
-//! kind of material, or a new color attribute, makes the meshes again;
-//! lights and cameras never touch geometry.
+//! kind of material, or a new color attribute, makes again the meshes of
+//! the shapes it colors, a material coming or going places the instances
+//! again; lights and cameras never touch geometry. A hidden shape keeps
+//! what it made.
 //!
 //! What it can't render as sent it says ([`Sync::problems`]): volumes past
 //! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
@@ -39,11 +41,11 @@ use crate::gpu::Changed;
 use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Look, Material};
+use crate::pictures;
 use crate::render::{
     Ambient, Corners, Fog, Instance, Light, LightShape, Mesh, Picture, Rims, Scene, Surface,
     Texture, Volume,
 };
-use kinogaki_render_api::geometry::image::Image;
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
 use kinogaki_render_api::standard::{self, Shape as LightKind};
 use kinogaki_render_api::{
@@ -90,6 +92,18 @@ struct Made {
     meshes: Vec<(Option<PrimId>, Arc<Mesh>)>,
     /// Its volume triangles by material: three corners a triangle.
     volumes: Vec<(Option<PrimId>, Vec<[f32; 3]>)>,
+}
+
+impl Made {
+    /// Whether it took any of `materials`.
+    fn reads(&self, materials: &BTreeSet<PrimId>) -> bool {
+        let read = self
+            .meshes
+            .iter()
+            .map(|m| m.0)
+            .chain(self.volumes.iter().map(|v| v.0));
+        read.flatten().any(|m| materials.contains(&m))
+    }
 }
 
 /// What a batch touched.
@@ -168,10 +182,9 @@ impl Sync {
         }
         let mut changed = Changed::default();
         if touched.materials {
-            if self.read_materials() {
-                self.made.clear();
-                touched.shapes = true;
-            }
+            let (remake, moved) = self.read_materials();
+            self.made.retain(|_, made| !made.reads(&remake));
+            touched.shapes |= moved || !remake.is_empty();
             changed.surfaces = true;
         }
         if touched.shapes {
@@ -192,10 +205,11 @@ impl Sync {
         changed
     }
 
-    /// The materials again, and the pictures their textures sample; whether
-    /// a material's kind, tint or coordinates changed (the meshes are made
-    /// again).
-    fn read_materials(&mut self) -> bool {
+    /// The materials again, and the pictures their textures sample: the
+    /// Material prims whose meshes are made again (their kind, tint, alpha
+    /// or coordinates changed, or they came or went), and whether any moved
+    /// to another index (the instances are placed again).
+    fn read_materials(&mut self) -> (BTreeSet<PrimId>, bool) {
         let before = std::mem::take(&mut self.materials);
         let mut surfaces = Vec::new();
         let mut pictures: Vec<Arc<Picture>> = Vec::new();
@@ -220,7 +234,9 @@ impl Sync {
                                     let made = match self.pictures.get(&image) {
                                         Some(made) => made.clone(),
                                         None => match self.prims.get(&image) {
-                                            Some(Prim::Texture(read)) => Arc::new(picture(read)),
+                                            Some(Prim::Texture(read)) => {
+                                                Arc::new(pictures::picture(read))
+                                            }
                                             _ => return None,
                                         },
                                     };
@@ -251,17 +267,31 @@ impl Sync {
         self.pictures.retain(|id, _| placed.contains_key(id));
         self.scene.surfaces = surfaces;
         self.scene.pictures = pictures;
-        let shape_of = |m: &(Material, u32)| match &m.0 {
-            Material::Surface(_, look) => {
-                let uv = look.texture.as_ref().map(|t| t.uv.clone());
-                Some((look.tint().cloned(), look.alpha().cloned(), uv, m.1))
-            }
-            Material::Volume(_) => None,
+        // What meshes take of a material: whether it is a volume, else its
+        // tint, alpha and coordinates.
+        let meshes_of = |m: Option<&(Material, u32)>| {
+            m.map(|(material, _)| match material {
+                Material::Surface(_, look) => {
+                    let uv = look.texture.as_ref().map(|t| t.uv.clone());
+                    Some((look.tint().cloned(), look.alpha().cloned(), uv))
+                }
+                Material::Volume(_) => None,
+            })
         };
-        let same = before.len() == self.materials.len()
-            && (before.iter().zip(&self.materials))
-                .all(|((a, x), (b, y))| a == b && shape_of(x) == shape_of(y));
-        !same
+        let ids: BTreeSet<PrimId> = before
+            .keys()
+            .chain(self.materials.keys())
+            .copied()
+            .collect();
+        let (was, now) = (|id| before.get(id), |id| self.materials.get(id));
+        let remake = (ids.iter())
+            .filter(|id| meshes_of(was(id)) != meshes_of(now(id)))
+            .copied()
+            .collect();
+        let moved = ids
+            .iter()
+            .any(|id| was(id).map(|m| m.1) != now(id).map(|m| m.1));
+        (remake, moved)
     }
 
     /// The material `id` names: its index, or none for a volume (and the
@@ -300,7 +330,12 @@ impl Sync {
                 _ => {}
             }
         }
+        // A shape placed by nothing now (hidden) keeps what it made.
+        let shapes: BTreeSet<PrimId> = placed.made.keys().map(|(shape, _)| *shape).collect();
+        (placed.kept)
+            .retain(|(shape, _), _| self.prims.contains_key(shape) && !shapes.contains(shape));
         self.made = placed.made;
+        self.made.append(&mut placed.kept);
         self.scene.meshes = placed.meshes;
         self.scene.instances = placed.instances;
         self.problems.geometry.clear();
@@ -381,9 +416,14 @@ impl Sync {
             let surface = material
                 .and_then(|m| self.materials.get(&m))
                 .map_or(u32::MAX, |m| m.1);
-            let tint = match self.material(*material) {
-                Material::Surface(_, look) => look.tint().and_then(|name| own_color(chain, name)),
-                Material::Volume(_) => None,
+            let (tint, alpha) = match self.material(*material) {
+                Material::Surface(_, look) => (
+                    look.tint().and_then(|name| own::<3>(chain, name)),
+                    look.alpha()
+                        .and_then(|name| own::<1>(chain, name))
+                        .map(|[a]| a),
+                ),
+                Material::Volume(_) => (None, None),
             };
             placed.instances.push(Instance {
                 mesh: index,
@@ -392,6 +432,7 @@ impl Sync {
                 surface,
                 id: object,
                 tint,
+                alpha,
             });
         }
         for (material, corners) in &made.volumes {
@@ -604,14 +645,16 @@ fn tints(shape: &Shape, triangles: &[[u32; 3]], look: &Look) -> Option<Vec<[f32;
 /// prim, itself and the instance.
 type Level<'a> = (PrimId, &'a Instancer, usize);
 
-/// The color the instances of `chain` hold of primvar `name` (the innermost
-/// holding one): its first three numbers, a number spread to three.
-fn own_color(chain: &[Level<'_>], name: &str) -> Option<[f32; 3]> {
+/// What the instances of `chain` hold of primvar `name` (the innermost
+/// holding one): its first `N` numbers, a number spread to `N` (a color's
+/// three, an alpha's one).
+fn own<const N: usize>(chain: &[Level<'_>], name: &str) -> Option<[f32; N]> {
     let (held, at) =
         (chain.iter().rev()).find_map(|(_, instancer, i)| instancer.primvar(*i, name))?;
     let width = usize::from(held.ty().width).max(1);
     let value = |k: usize| held.values().real(at * width + k.min(width - 1));
-    Some([value(0)?, value(1)?, value(2)?].map(|v| v as f32))
+    let values: Option<Vec<f32>> = (0..N).map(|k| value(k).map(|v| v as f32)).collect();
+    values?.try_into().ok()
 }
 
 /// Whether `a` and `b` are the same meshes, in the same order.
@@ -657,50 +700,5 @@ fn fog_of(fog: standard::Fog) -> Fog {
         falloff: fog.falloff,
         lit: fog.inscatter,
         anisotropy: fog.anisotropy,
-    }
-}
-
-/// The longest side, in texels, of a picture a surface samples: a larger
-/// one is halved until it fits (Pixel's films are coarse).
-pub const MAX_PICTURE: u32 = 2048;
-
-/// `image`'s main layer as a picture: its display window's texels, rows from
-/// the top, made straight where its encoding says the host premultiplied
-/// them (colors; data comes straight); a grey one grey in every channel.
-fn picture(image: &Image) -> Picture {
-    let window = image.display();
-    let [w, h] = window.size();
-    let [x0, y0] = window.min();
-    let main = image.layers().first().map(|l| l.format());
-    let channels = main.map_or(4, |f| f.channels.len());
-    let premultiplied = main.is_some_and(|f| f.encoding.premultiplied());
-    let mut texels = Vec::with_capacity(w as usize * h as usize);
-    for y in 0..h as i32 {
-        for x in 0..w as i32 {
-            let [r, g, b, a] = image.read_pixel(0, x0 + x, y0 + y);
-            let rgba = match channels {
-                1 => [r, r, r, 1.0],
-                2 => [r, r, r, g],
-                3 => [r, g, b, 1.0],
-                _ => [r, g, b, a],
-            };
-            texels.push(match premultiplied {
-                true => straight(rgba),
-                false => rgba,
-            });
-        }
-    }
-    let mut picture = Picture::new([w, h], texels);
-    while picture.size[0].max(picture.size[1]) > MAX_PICTURE {
-        picture = picture.halved();
-    }
-    picture
-}
-
-/// `rgba` unpremultiplied where its alpha is between 0 and 1.
-fn straight([r, g, b, a]: [f32; 4]) -> [f32; 4] {
-    match a > 0.0 && a < 1.0 {
-        true => [r / a, g / a, b / a, a],
-        false => [r, g, b, a],
     }
 }

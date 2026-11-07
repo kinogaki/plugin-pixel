@@ -12,13 +12,15 @@
 //! their shaders). The plugin around it: the package, the engine's
 //! [`description`] and [`settings`], its material [`nodes`] and starting
 //! materials ([`presets`]), its [`lights`] and fog, its [`outputs`], scene
-//! [`sync`] and the render thread ([`engine`]).
+//! [`sync`] with the [`pictures`] textures become, and the render thread
+//! ([`engine`]).
 pub mod description;
 pub mod engine;
 pub mod gpu;
 pub mod lights;
 pub mod nodes;
 pub mod outputs;
+pub mod pictures;
 pub mod presets;
 pub mod render;
 pub mod sampled;

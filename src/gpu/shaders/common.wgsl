@@ -64,7 +64,8 @@ struct Instance {
     // rgb: its transmittance, translucency × translucency color; w: 1 when
     // it is unlit (its color whatever lights it).
     transmit: vec4<f32>,
-    // x: the object id; y: its mesh's BVH root node.
+    // x: the object id; y: its mesh's BVH root node; z: what of `tint`
+    // stands for its corners' (1 its color, 2 its alpha).
     id: vec4<u32>,
     // Its texture's picture in the atlas: x, y its corner; z its width and
     // height (16 bits each); w the flags (records.rs: 1 textured, 2 the
@@ -79,15 +80,16 @@ struct Instance {
     // rgb: the albedo a ray bouncing off it sees (its color × its texture's
     // mean).
     mean: vec4<f32>,
-    // rgb: what stands for its mesh's corners' tint (its instance's own
-    // color); w: 1 where it does.
+    // What stands for its mesh's corners' tint (rgb) and alpha (w): its
+    // instance's own, where `id.z` says it holds them.
     tint: vec4<f32>,
 }
 
-// The tint of `object` where its corners' is `corners`: its own, if it has
-// one.
-fn tinted(object: Instance, corners: vec3<f32>) -> vec3<f32> {
-    return select(corners, object.tint.rgb, object.tint.w > 0.5);
+// The tint and alpha of `object` where its corners' are `corners`: its own
+// where it has them.
+fn tinted(object: Instance, corners: vec4<f32>) -> vec4<f32> {
+    let color = select(corners.rgb, object.tint.rgb, (object.id.z & 1u) != 0u);
+    return vec4<f32>(color, select(corners.a, object.tint.a, (object.id.z & 2u) != 0u));
 }
 
 // The id of a film pixel no mesh covers (the standard objectId's miss).

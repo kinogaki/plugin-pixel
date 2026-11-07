@@ -201,14 +201,20 @@ impl Worker {
         }
     }
 
-    /// Applies the updates waiting: every view renders again. A scene that
+    /// Applies the updates waiting: a view renders again when what it shows
+    /// changed (the scene, or the camera it looks through). A scene that
     /// doesn't fit the device fails every view, saying why, until one does.
     fn apply(&mut self) {
         let Some(update) = self.pending.take() else {
             return;
         };
+        let cameras: BTreeMap<ViewId, _> = (self.views.iter())
+            .map(|(id, view)| (*id, self.sync.camera(&view.desc.camera)))
+            .collect();
         let changed = self.sync.apply(update);
-        self.unfit = self.renderer.set_scene(self.sync.scene(), changed).err();
+        let unfit = self.renderer.set_scene(self.sync.scene(), changed).err();
+        let refit = unfit != self.unfit;
+        self.unfit = unfit;
         let problems = self.sync.problems();
         let new: Vec<Diagnostic> = (problems.iter())
             .filter(|p| !self.said.contains(p))
@@ -221,11 +227,13 @@ impl Worker {
             drop(published);
             (self.wake)();
         }
-        let up = self.sync.up();
-        for view in self.views.values_mut() {
+        let (up, sync) = (self.sync.up(), &self.sync);
+        for (id, view) in &mut self.views {
             view.settings.up = up;
-            view.generation += 1;
-            view.dirty = true;
+            if changed.any() || refit || sync.camera(&view.desc.camera) != cameras[id] {
+                view.generation += 1;
+                view.dirty = true;
+            }
         }
     }
 
