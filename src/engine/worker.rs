@@ -137,7 +137,7 @@ impl Worker {
     fn take(&mut self, message: Message) -> bool {
         match message {
             Message::Update(update) => self.queue(update),
-            Message::View(id, desc) => self.set_view(id, desc),
+            Message::View(id, desc, drops) => self.set_view(id, desc, drops),
             Message::Drop(id) => {
                 self.views.remove(&id);
                 lock(&self.shared).rings.remove(&id);
@@ -168,13 +168,16 @@ impl Worker {
         }
     }
 
-    fn set_view(&mut self, id: ViewId, desc: ViewDesc) {
+    /// View `id` as `desc`, given while the host had dropped its id `drops`
+    /// times.
+    fn set_view(&mut self, id: ViewId, desc: ViewDesc, drops: u64) {
         let settings = crate::settings::read(&desc.values, self.sync.up());
         match self.views.get_mut(&id) {
             Some(view) => {
                 view.desc = desc;
                 view.settings = settings;
                 view.generation += 1;
+                view.drops = drops;
                 view.dirty = true;
             }
             None => {
@@ -186,7 +189,7 @@ impl Worker {
                     viewport,
                     generation: 0,
                     filmed: None,
-                    drops: lock(&self.published).drops(id),
+                    drops,
                     dirty: true,
                     failed: None,
                     paused: false,

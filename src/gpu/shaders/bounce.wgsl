@@ -24,7 +24,7 @@ fn bounce(origin: vec3<f32>, d: vec3<f32>, depth: f32) -> vec3<f32> {
     let tri = triangles[hit.triangle];
     let object = instances[hit.instance];
     // The triangle's mean tint rides in its w's.
-    let tint = vec3<f32>(tri.v0.w, tri.e1.w, tri.e2.w);
+    let tint = tinted(object, vec3<f32>(tri.v0.w, tri.e1.w, tri.e2.w));
     // A texture's mean stands in for its texels a bounce sees.
     if object.transmit.w > 0.5 {
         return PI * object.mean.rgb * tint;

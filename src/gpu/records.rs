@@ -63,6 +63,8 @@ pub struct GpuInstance {
     /// rgb: the albedo a ray bouncing off it sees, its color × its
     /// texture's mean.
     pub mean: [f32; 4],
+    /// rgb: what stands for its mesh's corners' tint; w: 1 where it does.
+    pub tint: [f32; 4],
 }
 
 /// Texture flags (`texture.w`): it samples one; the nearest texel; wraps
@@ -82,6 +84,7 @@ impl GpuInstance {
             to_world: instance.to_world,
             to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
             id: [instance.id, root, 0, 0],
+            tint: instance.tint.map_or([0.0; 4], |t| V3::of(t).with_w(1.0)),
             ..GpuInstance::default()
         };
         packed.set_surface(surface, atlas);

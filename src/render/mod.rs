@@ -138,6 +138,9 @@ pub struct Instance {
     pub surface: u32,
     /// The object id it writes.
     pub id: u32,
+    /// What stands for its mesh's corners' tint: its instance's own value of
+    /// the attribute its material reads (none: the corners').
+    pub tint: Option<[f32; 3]>,
 }
 
 /// A Pixel Surface as a frame shades it.

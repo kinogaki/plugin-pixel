@@ -511,6 +511,7 @@ mod tests {
             to_own: Some(rows(-dx)),
             surface,
             id: 7,
+            tint: None,
         }
     }
 

@@ -1,7 +1,8 @@
 // The G-buffer pass: rasterizes the instances (each mesh drawn once for all
 // its instances, in its own space, placed by each) at film resolution into albedo
 // (the material's color × the vertex tint, its color attribute: blended
-// across a triangle, flat where the tint is a primitive's, × its texture:
+// across a triangle, flat where the tint is a primitive's, or its instance's
+// own color, × its texture:
 // the picture at the transformed coordinates, its nearest texel or four
 // blended, each axis wrapped, × its factor; where the texture's alpha is
 // below a cutout, nothing), normal (world, facing the camera), depth (along
@@ -123,7 +124,7 @@ fn fs(v: VertexOut) -> Targets {
         discard;
     }
     var out: Targets;
-    out.albedo = vec4<f32>(object.albedo.rgb * v.tint * picture.rgb, 1.0);
+    out.albedo = vec4<f32>(object.albedo.rgb * tinted(object, v.tint) * picture.rgb, 1.0);
     out.normal = vec4<f32>(n, 0.0);
     out.depth = dot(v.world - frame.eye.xyz, -frame.back.xyz);
     out.id = object.id.x;

@@ -239,6 +239,55 @@ fn a_prototype_renders_only_through_its_instancer_with_its_materials() {
     );
 }
 
+/// Instances differ by their own primvars: each instance's `Cd` stands for
+/// its prototype's corners' (the Pixel Surface reads `Cd`), and its `id` is
+/// its object id; an Instancer's whole `Cd` colors each of its instances,
+/// and instances without an `id` count from 1.
+#[test]
+fn an_instances_own_color_and_id_are_its_own() {
+    let mut sync = Sync::default();
+    let surface = material(SURFACE, &[]);
+    let row = |x: f64| Xform::translation(Vec3::new(x, 0.0, 0.0));
+    let colors = Attribute::tuples(vec![[1.0f32, 0.0, 0.0], [0.0, 1.0, 0.0]], Meaning::Color);
+    let ids = Attribute::tuples(vec![40i64, 41], Meaning::None);
+    let own = (kinogaki_render_api::geometry::Attributes::new())
+        .with(Domain::Instance, names::CD, colors.unwrap())
+        .and_then(|a| a.with(Domain::Instance, names::ID, ids.unwrap()))
+        .unwrap();
+    let inner = Instancer::builder(vec![id(1)], vec![row(0.0), row(2.0)].into())
+        .primvars(own)
+        .build()
+        .unwrap();
+    let whole = Attribute::tuples(vec![[0.0f32, 0.0, 1.0]], Meaning::Color).unwrap();
+    let blue = (kinogaki_render_api::geometry::Attributes::new())
+        .with(Domain::Detail, names::CD, whole)
+        .unwrap();
+    let outer = Instancer::builder(vec![id(1)], vec![row(4.0), row(6.0)].into())
+        .primvars(blue)
+        .build()
+        .unwrap();
+    sync.apply(added(vec![
+        (id(0), surface),
+        (id(1), Prim::Shape(square(Some(id(0)), [0.5; 3]))),
+        (id(2), Prim::Instancer(inner)),
+        (id(3), Prim::Instancer(outer)),
+    ]));
+    let scene = sync.scene();
+    let mut seen: Vec<(u32, Option<[f32; 3]>)> =
+        (scene.instances.iter()).map(|i| (i.id, i.tint)).collect();
+    seen.sort_by_key(|(id, _)| *id);
+    let blue = Some([0.0, 0.0, 1.0]);
+    assert_eq!(
+        seen,
+        [
+            (1, blue),
+            (2, blue),
+            (40, Some([1.0, 0.0, 0.0])),
+            (41, Some([0.0, 1.0, 0.0]))
+        ]
+    );
+}
+
 #[test]
 fn lights_domes_rims_and_fog_light_the_scene() {
     let mut sync = Sync::default();

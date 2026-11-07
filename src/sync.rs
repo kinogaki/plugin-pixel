@@ -7,7 +7,10 @@
 //!   meshes, made once and kept while only the shape's placement, visibility
 //!   or name changes (its dirty bits); a prim an Instancer names renders
 //!   only through it, and an instance's material overrides its prototype's
-//!   (meshes of their own, kept likewise). Every placement of a mesh is an
+//!   (meshes of their own, kept likewise). An instance's own primvars (its
+//!   Instancer's, else an outer one's) give its object id (`id`, else its
+//!   index + 1) and the color its material's attribute reads, which stands
+//!   for its mesh's tint. Every placement of a mesh is an
 //!   instance, so a move remakes the instances alone. Triangles whose
 //!   material is a Pixel Volume become that volume's bounds instead, in
 //!   world space, and are not drawn. A material's color attribute becomes
@@ -281,16 +284,15 @@ impl Sync {
             ..Placed::default()
         };
         for (id, prim) in &self.prims {
-            let object = id.slot + 1;
             match prim {
                 _ if named.contains(id) => {}
                 Prim::Shape(shape) if shape.visibility().visible => {
                     let at = shape.xform().at(0.0);
-                    self.place((*id, shape), &at, None, object, &mut placed);
+                    self.place((*id, shape), &at, None, &[], &mut placed);
                 }
                 Prim::Instancer(inst) if inst.visibility().visible => {
                     let at = inst.xform().at(0.0);
-                    self.instances(inst, &at, object, &mut placed, &mut vec![*id]);
+                    self.instances((*id, inst), &at, &mut placed, &mut Vec::new());
                 }
                 _ => {}
             }
@@ -313,45 +315,55 @@ impl Sync {
         (self.scene.volumes, self.filled_by) = placed.volumes.into_iter().unzip();
     }
 
-    /// `instancer`'s instances under `above`, it and the Instancers above it
-    /// on `path`: one met again places nothing there.
-    fn instances(
-        &self,
-        instancer: &Instancer,
+    /// Instancer `id`'s instances under `above`, below the instances of
+    /// `chain`: an Instancer met again there places nothing.
+    fn instances<'a>(
+        &'a self,
+        (id, instancer): (PrimId, &'a Instancer),
         above: &Xform,
-        object: u32,
         placed: &mut Placed,
-        path: &mut Vec<PrimId>,
+        chain: &mut Vec<Level<'a>>,
     ) {
         for (i, xform) in instancer.xforms().iter().enumerate() {
             let at = above.compose(xform);
             let material = instancer.subsets().of(i).map(|m| m.prim());
             let prototype = instancer.prototype_of(i);
+            chain.push((id, instancer, i));
             match self.prims.get(&prototype) {
                 Some(Prim::Shape(shape)) => {
-                    self.place((prototype, shape), &at, material, object, placed);
+                    self.place((prototype, shape), &at, material, chain, placed);
                 }
-                Some(Prim::Instancer(_)) if path.contains(&prototype) => placed.round = true,
+                Some(Prim::Instancer(_)) if chain.iter().any(|(on, ..)| *on == prototype) => {
+                    placed.round = true;
+                }
                 Some(Prim::Instancer(nested)) => {
-                    path.push(prototype);
-                    self.instances(nested, &at, object, placed, path);
-                    path.pop();
+                    self.instances((prototype, nested), &at, placed, chain);
                 }
                 _ => {}
             }
+            chain.pop();
         }
     }
 
-    /// Shape `id` placed by `at`, its materials overridden by `instead`: an
-    /// instance of each of its meshes, and its volumes in world space.
+    /// Shape `id` placed by `at`, its materials overridden by `instead`, as
+    /// the instances of `chain` place it (none: on its own): an instance of
+    /// each of its meshes, and its volumes in world space.
     fn place(
         &self,
         (id, shape): (PrimId, &Shape),
         at: &Xform,
         instead: Option<PrimId>,
-        object: u32,
+        chain: &[Level<'_>],
         placed: &mut Placed,
     ) {
+        // The innermost instance's id, else its index + 1; a shape's own
+        // slot + 1.
+        let object = match chain.last() {
+            Some((_, instancer, i)) => (instancer.primvar(*i, names::ID))
+                .and_then(|(id, at)| id.values().real(at))
+                .map_or(*i as u32 + 1, |id| id as u32),
+            None => id.slot + 1,
+        };
         let key = (id, instead);
         let made = match placed.made.get(&key).or_else(|| placed.kept.get(&key)) {
             Some(made) => made.clone(),
@@ -366,12 +378,17 @@ impl Sync {
             let surface = material
                 .and_then(|m| self.materials.get(&m))
                 .map_or(u32::MAX, |m| m.1);
+            let tint = match self.material(*material) {
+                Material::Surface(_, look) => look.tint().and_then(|name| own_color(chain, name)),
+                Material::Volume(_) => None,
+            };
             placed.instances.push(Instance {
                 mesh: index,
                 to_world,
                 to_own,
                 surface,
                 id: object,
+                tint,
             });
         }
         for (material, corners) in &made.volumes {
@@ -563,6 +580,20 @@ struct Placed {
     volumes: Vec<(Volume, Option<PrimId>)>,
     /// An Instancer placed itself.
     round: bool,
+}
+
+/// One of the instances placing a shape, outermost first: an Instancer's
+/// prim, itself and the instance.
+type Level<'a> = (PrimId, &'a Instancer, usize);
+
+/// The color the instances of `chain` hold of primvar `name` (the innermost
+/// holding one): its first three numbers, a number spread to three.
+fn own_color(chain: &[Level<'_>], name: &str) -> Option<[f32; 3]> {
+    let (held, at) =
+        (chain.iter().rev()).find_map(|(_, instancer, i)| instancer.primvar(*i, name))?;
+    let width = usize::from(held.ty().width).max(1);
+    let value = |k: usize| held.values().real(at * width + k.min(width - 1));
+    Some([value(0)?, value(1)?, value(2)?].map(|v| v as f32))
 }
 
 /// Whether `a` and `b` are the same meshes, in the same order.

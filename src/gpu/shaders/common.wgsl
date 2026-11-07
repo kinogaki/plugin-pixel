@@ -79,6 +79,15 @@ struct Instance {
     // rgb: the albedo a ray bouncing off it sees (its color × its texture's
     // mean).
     mean: vec4<f32>,
+    // rgb: what stands for its mesh's corners' tint (its instance's own
+    // color); w: 1 where it does.
+    tint: vec4<f32>,
+}
+
+// The tint of `object` where its corners' is `corners`: its own, if it has
+// one.
+fn tinted(object: Instance, corners: vec3<f32>) -> vec3<f32> {
+    return select(corners, object.tint.rgb, object.tint.w > 0.5);
 }
 
 // The id of a film pixel no mesh covers (the standard objectId's miss).
