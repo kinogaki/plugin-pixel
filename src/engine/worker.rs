@@ -55,9 +55,8 @@ pub(super) struct Worker {
     readings: Vec<(ViewId, Reading)>,
     /// Display image sets made so far.
     sets: u64,
-    /// What the scene can't render as sent, reported with the next frame;
-    /// and what was reported last, so each is said once.
-    problems: Vec<Diagnostic>,
+    /// What the scene can't render as sent, as said last: each is said
+    /// once while it stands.
     said: Vec<Diagnostic>,
     /// Why the scene doesn't fit the device: every view fails with it until
     /// a scene does.
@@ -84,7 +83,6 @@ impl Worker {
             focused: None,
             readings: Vec::new(),
             sets: 0,
-            problems: Vec::new(),
             said: Vec::new(),
             unfit: None,
         }
@@ -209,9 +207,16 @@ impl Worker {
         let changed = self.sync.apply(update);
         self.unfit = self.renderer.set_scene(self.sync.scene(), changed).err();
         let problems = self.sync.problems();
-        if problems != self.said {
-            self.said.clone_from(&problems);
-            self.problems = problems;
+        let new: Vec<Diagnostic> = (problems.iter())
+            .filter(|p| !self.said.contains(p))
+            .cloned()
+            .collect();
+        self.said = problems;
+        if !new.is_empty() {
+            let mut published = lock(&self.published);
+            new.into_iter().for_each(|p| published.say(p));
+            drop(published);
+            (self.wake)();
         }
         let up = self.sync.up();
         for view in self.views.values_mut() {
@@ -352,7 +357,6 @@ impl Worker {
             stats: RenderStats {
                 samples: 1,
                 target: 1,
-                problems: std::mem::take(&mut self.problems),
                 ..RenderStats::default()
             },
         });
@@ -361,13 +365,8 @@ impl Worker {
             ring.holds[at] = Some(frame.clone());
         }
         drop(shared);
-        let problems = frame.stats.problems.clone();
         if lock(&self.published).publish(frame, view.drops) {
             (self.wake)();
-        } else {
-            // Dropped while it rendered: its frame is no one's, its problems
-            // the next one's.
-            self.problems = problems;
         }
     }
 
