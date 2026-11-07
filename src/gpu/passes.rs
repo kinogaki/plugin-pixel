@@ -184,6 +184,7 @@ impl Passes {
                     texture(7, false),
                     texture(8, false),
                     written(9, COLOR),
+                    texture(10, false),
                 ],
                 None,
             ),
@@ -258,6 +259,7 @@ impl Passes {
                     tex(Output::Depth),
                     tex(Output::Volume),
                     tex(Output::Beauty),
+                    Tex(&t.transmit.view),
                 ],
             ),
         }

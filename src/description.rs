@@ -22,6 +22,9 @@ pub fn description() -> EngineDescription {
         types: [lights::light_types(), vec![standard::fog()]].concat(),
         // Every output, each a film-size plane, asked for by default.
         aovs: Output::ALL.map(|o| AovSpec::new(o.aov(), true)).to_vec(),
+        // MaterialX's Surface Unlit, shown by a Surface Material; any other
+        // material arrives as a Pixel Surface of its standard form.
+        standard_nodes: ["surface_unlit", "surfacematerial"].map(Arc::from).to_vec(),
         // Each pass is a whole frame; a pixel-art frame is drawn sharp, with
         // no motion blur.
         realtime: true,

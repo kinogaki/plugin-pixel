@@ -61,7 +61,8 @@ struct Instance {
     to_own_z: vec4<f32>,
     // rgb: the Pixel Surface's color (ACEScg).
     albedo: vec4<f32>,
-    // rgb: its transmittance, translucency × translucency color.
+    // rgb: its transmittance, translucency × translucency color; w: 1 when
+    // it is unlit (its color whatever lights it).
     transmit: vec4<f32>,
     // x: the object id; y: its mesh's BVH root node.
     id: vec4<u32>,

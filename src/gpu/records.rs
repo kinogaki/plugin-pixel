@@ -61,10 +61,11 @@ impl GpuInstance {
         packed
     }
 
-    /// Shades as `surface`.
+    /// Shades as `surface`; an unlit one's transmittance carries 1 in w.
     pub fn set_surface(&mut self, surface: Surface) {
         self.albedo = V3::of(surface.color).with_w(0.0);
-        self.transmit = V3::of(surface.transmittance()).with_w(0.0);
+        let unlit = f32::from(u8::from(surface.unlit));
+        self.transmit = V3::of(surface.transmittance()).with_w(unlit);
     }
 }
 

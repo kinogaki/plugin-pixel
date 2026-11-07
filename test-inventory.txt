@@ -7,6 +7,7 @@ kinogaki-pixel/gpu gpu engine::a_dropped_views_kept_outputs_go_with_it
 kinogaki-pixel/gpu gpu engine::a_final_read_through_a_camera_gone_fails
 kinogaki-pixel/gpu gpu engine::a_new_color_renders_again_and_views_share_the_scene
 kinogaki-pixel/gpu gpu engine::a_preview_is_a_swatch_of_the_material
+kinogaki-pixel/gpu gpu engine::an_unlit_surface_is_its_color_whatever_lights_it
 kinogaki-pixel/gpu gpu engine::final_outputs_come_at_the_views_size_and_a_dropped_read_lets_go
 kinogaki-pixel/gpu gpu engine::the_light_falls_on_the_shade_levels
 kinogaki-pixel/gpu hand moves::hand_run_a_moved_object_beside_many_instances
@@ -23,7 +24,10 @@ kinogaki-pixel/lib test lights::tests::emissions_are_colors_at_their_intensity
 kinogaki-pixel/lib test nodes::tests::a_surface_is_an_openpbr_surface_of_its_color_and_a_volume_none
 kinogaki-pixel/lib test nodes::tests::a_surface_reads_its_constants_and_its_attribute
 kinogaki-pixel/lib test nodes::tests::a_volume_reads_its_medium_and_shows_as_one
+kinogaki-pixel/lib test nodes::tests::materialx_reaches_pixel_as_surface_unlit_or_its_standard_forms_surface
+kinogaki-pixel/lib test nodes::tests::surface_unlit_is_an_unlit_surface_of_its_emission
 kinogaki-pixel/lib test nodes::tests::the_standard_form_becomes_a_surface_of_its_base_color
+kinogaki-pixel/lib test nodes::tests::the_standard_form_of_light_alone_is_unlit_and_an_attribute_drives_the_color
 kinogaki-pixel/lib test outputs::tests::each_output_is_described_by_its_id
 kinogaki-pixel/lib test presets::tests::each_preset_makes_a_material_of_a_pixel_node
 kinogaki-pixel/lib test render::bvh::tests::coincident_triangles_still_split

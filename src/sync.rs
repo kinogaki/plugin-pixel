@@ -185,9 +185,10 @@ impl Sync {
         self.problems.materials.clear();
         for (id, prim) in &self.prims {
             if let Prim::Material(m) = prim {
-                if let Some(def) = nodes::foreign(&m.network) {
+                for node in m.network.cut() {
                     self.problems.materials.push(Diagnostic::warning(format!(
-                        "{def} isn't a Pixel material: it renders the default surface"
+                        "{}: Pixel doesn't render `{node}`",
+                        m.path
                     )));
                 }
                 let material = nodes::material(&m.network);

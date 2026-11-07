@@ -13,14 +13,15 @@ A view of `w × h` pixels renders a film of `ceil(w / s) × ceil(h / s)` pixels,
 3. **Direct**: each light with one hard shadow ray: area lights and spots as points at their centres, distant lights as parallel light; spots fade over their cone; a gobo dapples distant lights and spots. Light reaching a translucent surface's back comes through × its transmittance, and a shadow ray keeps what the thin surfaces it crosses let through. AO on Direct darkens it by the AO.
 4. **Bounce**: one diffuse bounce, GI Samples rays a pixel in the same fixed pattern up to GI Distance, each hit lit as the direct pass lights it, × its albedo, × GI.
 5. **Volume**: each camera ray marched through the Pixel Volumes it crosses (closed meshes found by their crossings) and, when In-scatter is on, the fog, at a fixed jitter a pixel; each step lit by the lights with shadow rays (surfaces cut light shafts), the gobos and the domes × one sky ray.
-6. **Shade**: the light (direct + ambient + bounce + the rim lights) quantized by its luminance to Shade Levels with an ordered Bayer dither between adjacent levels, each level its Shade Ramp color in the light's chromaticity, × albedo; the volumes over it on their own levels (Volume Levels, Volume Dither); then flat height fog.
+6. **Shade**: the light (direct + ambient + bounce + the rim lights) quantized by its luminance to Shade Levels with an ordered Bayer dither between adjacent levels, each level its Shade Ramp color in the light's chromaticity, × albedo (an unlit surface's albedo alone); the volumes over it on their own levels (Volume Levels, Volume Dither); then flat height fog.
 7. **Upscale**: each film pixel repeated over its block of the view.
 
 Every pass is deterministic: a frame of the same scene and view is the same image. A view renders once when something it shows changes, then rests.
 
 ## Materials, lights and fog
 
-- **Pixel Surface**: Color, Color Attribute (`Cd`), Translucency, Translucency Color. **Pixel Volume**: Density, Scatter Color, Anisotropy, Edge Falloff, Shadows, Emission and Noise. Pixel has no node graph: each node is a material on its own. The shaded viewport shows a surface's color (× its attribute) and a volume as a ghost of its bounds; another engine's material renders as a Pixel Surface of its color, and another engine renders a Pixel Surface as its standard form, an OpenPBR Surface of its color (a Pixel Volume has none).
+- **Pixel Surface**: Color, Color Attribute (`Cd`), Translucency, Translucency Color. **Pixel Volume**: Density, Scatter Color, Anisotropy, Edge Falloff, Shadows, Emission and Noise. Pixel has no node graph: each node is a material on its own. The shaded viewport shows a surface's color (× its attribute) and a volume as a ghost of its bounds.
+- **MaterialX**: Pixel renders Surface Unlit as it is, an unlit surface: Emission × Emission Color whatever lights it (a bounce ray meeting it brings that light back), Transmission × Transmission Color letting light through; what drives its inputs it doesn't render, and says so once ("Pixel doesn't render `image`"). Any other material arrives as its standard form, an OpenPBR Surface, as a Pixel Surface: light alone (no base, no specular) a Surface Unlit of its emission; else a Pixel Surface of its base color, or of white times the attribute a geometric color or property drives the base color with. Another engine renders a Pixel Surface as its standard form, an OpenPBR Surface of its color (a Pixel Volume has none). It samples no images yet.
 - **Lights** (`kinogaki.pixel.light`): UsdLux's area, dome, distant and spot lights (distant lights and spots with a Gobo section), and the **Rim Light**, a Fresnel-like edge, `(1 − n·v)⁴` × its emission, where direct light reaches (Lit) or all round (All).
 - **Fog** (`kinogaki.pixel.fog`): exponential height fog, flat, or lit and marched with the volumes when In-scatter is on.
 - Starting materials: Grass, Stone, Clay, Fog Volume, Mist.
@@ -36,7 +37,7 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 | `render` | The renderer, knowing no SDK: the scene (meshes in their own space and the instances placing them), `film`, `camera`, `bvh` (binned SAH in two levels: a BVH a mesh, built when it is made, and a top level over the instances, built when one moves), `dither`, `settings` |
 | `gpu` | The passes on the host's device (the G-buffer draws each mesh once for its instances; rays walk the top level, then each instance's mesh in its own space), their records and shaders (`gpu/shaders`) |
 | `description`, `settings`, `outputs` | What a host reads: capabilities, settings, outputs |
-| `nodes`, `presets` | Pixel Surface and Pixel Volume, their display approximation and translation; the starting materials |
+| `nodes`, `presets` | Pixel Surface and Pixel Volume, what a network renders as (Surface Unlit too), their display approximation, standard form and translation; the starting materials |
 | `lights` | The light and fog types and kinds; emissions as colors |
 | `sync` | The host's prims as the scene: each shape's meshes by material, kept while its dirty bits say only its placement, visibility or name changed; every placement an instance; volumes, lights |
 | `engine` | The render thread, the display images, final reads and previews |

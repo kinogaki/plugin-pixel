@@ -12,13 +12,17 @@
 //!   Emission section and a Noise section (value-noise fBm in world space).
 //!
 //! Pixel has no node graph: each is a material on its own, its values
-//! constants, the network's shown node. [`Rules`] approximates them for the
-//! shaded viewport and makes a Pixel Surface of another engine's material.
+//! constants, the network's shown node. Of MaterialX it renders Surface
+//! Unlit, as an unlit surface: its emission color × emission, whatever lights
+//! it, letting through transmission × transmission color. [`Rules`]
+//! approximates its materials for the shaded viewport, gives a Pixel Surface
+//! as an OpenPBR Surface, and makes one of another material's.
 use crate::render::{Medium, Surface};
+use kinogaki_render_api::material::mtlx;
 use kinogaki_render_api::material::standard::open_pbr;
 use kinogaki_render_api::value::{Number, NumberLook, Parameters, Value, ValueKind};
 use kinogaki_render_api::{
-    Input, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, Parameter, Section,
+    Input, Link, MaterialDisplay, MaterialNetwork, MaterialRules, NodeDef, Parameter, Section,
 };
 use kinogaki_studio_api::NodeTypeId;
 use std::sync::Arc;
@@ -27,6 +31,8 @@ use std::sync::Arc;
 pub const SURFACE: NodeTypeId = NodeTypeId::declared("kinogaki.pixel.pixel_surface");
 /// The Pixel Volume's id.
 pub const VOLUME: NodeTypeId = NodeTypeId::declared("kinogaki.pixel.pixel_volume");
+/// MaterialX's Surface Unlit, which Pixel renders as it is.
+const UNLIT: &str = "surface_unlit";
 
 /// The groups a node's values sit in.
 const MAIN: &str = "main";
@@ -256,20 +262,24 @@ impl Values<'_> {
     }
 }
 
-/// The node `network` shows when Pixel doesn't declare it (it renders the
-/// default surface).
-pub fn foreign(network: &MaterialNetwork) -> Option<NodeTypeId> {
-    let node = network.output()?;
-    (node.def.id != SURFACE && node.def.id != VOLUME).then_some(node.def.id)
-}
-
-/// What `network` renders as: its shown node's material (a node it doesn't
-/// declare, or none: the default).
+/// What `network` renders as: its surface's material (a Pixel Surface or
+/// Volume, or MaterialX's Surface Unlit; anything else, or none: the
+/// default).
 pub fn material(network: &MaterialNetwork) -> Material {
-    let Some(node) = network.output() else {
+    let Some(node) = network.surface().map(|at| &network.nodes()[at as usize]) else {
         return Material::default();
     };
     let v = Values(&node.values);
+    if node.def.mtlx().is_some_and(|d| d.node == UNLIT) {
+        let emission = v.number("emission", 1.0).max(0.0);
+        let surface = Surface {
+            color: v.color("emission_color", [1.0; 3]).map(|c| c * emission),
+            translucency: v.number("transmission", 0.0).clamp(0.0, 1.0),
+            translucency_color: v.color("transmission_color", [1.0; 3]),
+            unlit: true,
+        };
+        return Material::Surface(surface, None);
+    }
     if node.def.id == VOLUME {
         let offset = node
             .values
@@ -307,6 +317,7 @@ pub fn material(network: &MaterialNetwork) -> Material {
         color: v.color("color", [0.8; 3]),
         translucency: v.number("translucency", 0.0).clamp(0.0, 1.0),
         translucency_color: v.color("translucency_color", [1.0; 3]),
+        unlit: false,
     };
     Material::Surface(surface, attribute)
 }
@@ -348,18 +359,53 @@ impl MaterialRules for Rules {
         open_pbr(&[("base_color".to_owned(), color)].into()).ok()
     }
 
-    /// The standard form, an OpenPBR Surface, as a Pixel Surface of its base
-    /// color.
+    /// The standard form, an OpenPBR Surface, as Pixel renders it: light
+    /// alone (no base, no specular) a Surface Unlit of its emission; else a
+    /// Pixel Surface of its base color, or of white times the attribute a
+    /// geometric color or property drives the base color with.
     fn translate(&self, standard: &MaterialNetwork) -> Option<MaterialNetwork> {
-        let shown = &standard.nodes()[standard.surface()? as usize];
-        let color = shown.values.get("base_color")?.color()?;
-        network_of([("color".to_owned(), Value::Color(color))].into())
+        let at = standard.surface()?;
+        let shown = &standard.nodes()[at as usize];
+        let number = |name: &str| shown.values.get(name).and_then(Value::number);
+        let color = |name: &str| shown.values.get(name).and_then(Value::color);
+        if number("base_weight") == Some(0.0) && number("specular_weight") == Some(0.0) {
+            let values = [
+                ("emission", Value::Number(number("emission_luminance")?)),
+                ("emission_color", Value::Color(color("emission_color")?)),
+            ];
+            let unlit = mtlx::def("ND_surface_unlit")?;
+            let values = values.map(|(n, v)| (n.to_owned(), v)).into();
+            let mut built = MaterialNetwork::builder();
+            let at = built.node(&unlit, &values).ok()?;
+            return built.build(at).ok();
+        }
+        let into = |l: &&Link| l.to == at && &*l.input == "base_color";
+        let read = (standard.links().iter().find(into)).and_then(|l| {
+            let node = &standard.nodes()[l.from as usize];
+            match node.def.mtlx()?.node.as_str() {
+                "geomcolor" => Some("Cd"),
+                "geompropvalue" => node.values.get("geomprop")?.text(),
+                _ => None,
+            }
+        });
+        let base = match read {
+            Some(_) => [1.0; 3],
+            None => color("base_color")?,
+        };
+        let mut values: Parameters = [("color".to_owned(), Value::Color(base))].into();
+        if let Some(name) = read {
+            values.insert("attribute".to_owned(), Value::Text(name.to_owned()));
+        }
+        network_of(values)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// OpenPBR Surface's signature.
+    const OPEN_PBR: &str = "ND_open_pbr_surface_surfaceshader";
 
     fn of(def: NodeDef, values: &[(&str, Value)]) -> MaterialNetwork {
         let values: Parameters = values
@@ -421,6 +467,97 @@ mod tests {
         );
         let shown = Rules.display(&mist);
         assert!(shown.volume && shown.color == [0.8; 3]);
+    }
+
+    /// `values` by name.
+    fn values(values: &[(&str, Value)]) -> Parameters {
+        (values.iter())
+            .map(|(n, v)| ((*n).to_owned(), v.clone()))
+            .collect()
+    }
+
+    /// A node feeding a surface: its signature, its values and the input
+    /// it feeds.
+    type Fed<'a> = (&'a str, &'a [(&'a str, Value)], &'a str);
+
+    /// MaterialX node `signature` holding `held`, shown by a Surface
+    /// Material, `fed` wired into it.
+    fn shown(signature: &str, held: &[(&str, Value)], fed: Option<Fed<'_>>) -> MaterialNetwork {
+        let mut built = MaterialNetwork::builder();
+        let s = (built.node(&mtlx::def(signature).unwrap(), &values(held))).unwrap();
+        if let Some((by, held, into)) = fed {
+            let n = built.node(&mtlx::def(by).unwrap(), &values(held)).unwrap();
+            built.link(n, "out", s, into).unwrap();
+        }
+        let m = built
+            .node(
+                &mtlx::def("ND_surfacematerial").unwrap(),
+                &Parameters::new(),
+            )
+            .unwrap();
+        built.link(s, "out", m, "surfaceshader").unwrap();
+        built.build(m).unwrap()
+    }
+
+    #[test]
+    fn surface_unlit_is_an_unlit_surface_of_its_emission() {
+        let lamp = shown(
+            "ND_surface_unlit",
+            &[
+                ("emission", Value::Number(2.0)),
+                ("emission_color", Value::Color([0.5, 0.25, 1.0])),
+                ("transmission", Value::Number(0.5)),
+            ],
+            None,
+        );
+        let Material::Surface(s, attribute) = material(&lamp) else {
+            panic!("a surface");
+        };
+        assert!(s.unlit && attribute.is_none());
+        assert_eq!((s.color, s.transmittance()), ([1.0, 0.5, 2.0], [0.5; 3]));
+    }
+
+    #[test]
+    fn the_standard_form_of_light_alone_is_unlit_and_an_attribute_drives_the_color() {
+        let glow = [
+            ("base_weight", Value::Number(0.0)),
+            ("specular_weight", Value::Number(0.0)),
+            ("emission_luminance", Value::Number(1.0)),
+            ("emission_color", Value::Color([0.9, 0.3, 0.1])),
+        ];
+        let glow = Rules.translate(&shown(OPEN_PBR, &glow, None)).unwrap();
+        let Material::Surface(s, _) = material(&glow) else {
+            panic!("a surface");
+        };
+        assert!(s.unlit);
+        assert_eq!(s.color, [0.9, 0.3, 0.1]);
+        let paint = [("geomprop", Value::Text("paint".to_owned()))];
+        let paint = Some(("ND_geompropvalue_color3", &paint[..], "base_color"));
+        let painted = shown(OPEN_PBR, &[], paint);
+        let Material::Surface(s, attribute) = material(&Rules.translate(&painted).unwrap()) else {
+            panic!("a surface");
+        };
+        assert_eq!((s.color, attribute.as_deref()), ([1.0; 3], Some("paint")));
+    }
+
+    #[test]
+    fn materialx_reaches_pixel_as_surface_unlit_or_its_standard_forms_surface() {
+        use kinogaki_render_api::Engines;
+        let pixel = crate::description::description();
+        let engines = Engines::new(vec![pixel.clone()]);
+        // glTF PBR: a Pixel Surface of its standard form's base color.
+        let orange = [("base_color", Value::Color([0.9, 0.5, 0.1]))];
+        let gltf = shown("ND_gltf_pbr_surfaceshader", &orange, None);
+
+        let Material::Surface(s, _) = material(&engines.adopt(&gltf, pixel.id())) else {
+            panic!("a surface");
+        };
+        assert_eq!((s.color, s.unlit), ([0.9, 0.5, 0.1], false));
+        // Surface Unlit of an image: as it is, the image cut and named.
+        let image = Some(("ND_image_color3", &[][..], "emission_color"));
+        let lamp = engines.adopt(&shown("ND_surface_unlit", &[], image), pixel.id());
+        assert!(matches!(material(&lamp), Material::Surface(s, _) if s.unlit));
+        assert_eq!(lamp.cut(), [std::sync::Arc::from("image")]);
     }
 
     #[test]

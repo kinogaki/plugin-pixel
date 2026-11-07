@@ -1,8 +1,8 @@
 //! Pixel as a host drives it, on the GPU: a frame a change and none at rest,
-//! one wake a frame, the grid locked to the view, the shade levels, a
-//! material's new color, views sharing a scene, final outputs, previews,
-//! the film a compositor reads, and a dropped read.
-use super::support::{LIMIT, at, pixel, scene, surface, view};
+//! one wake a frame, the grid locked to the view, the shade levels, an unlit
+//! surface, a material's new color, views sharing a scene, final outputs,
+//! previews, the film a compositor reads, and a dropped read.
+use super::support::{LIMIT, at, pixel, scene, surface, unlit, view};
 use kinogaki_render_api::aov::standard as aovs;
 use kinogaki_render_api::display::Texture;
 use kinogaki_render_api::geometry::image::{Image, metadata};
@@ -89,6 +89,23 @@ fn the_light_falls_on_the_shade_levels() {
     colors.sort_unstable();
     colors.dedup();
     assert!(colors.len() <= 7, "{} colors: {colors:?}", colors.len());
+}
+
+/// MaterialX's Surface Unlit, rendered as it is: the box shows its color,
+/// whatever lights it.
+#[test]
+#[ignore = "gpu"]
+fn an_unlit_surface_is_its_color_whatever_lights_it() {
+    let (mut engine, _display, waiter, _device) = pixel();
+    let mut update = scene();
+    update.added[1].1 = unlit([0.2, 0.6, 0.3]);
+    engine.update(update);
+    let flat = [("dither", Value::Choice("off".into()))];
+    engine.view(ViewId(1), view(64, 48, eye(), &flat));
+    waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
+    let shown = at(&engine.latest(ViewId(1)).unwrap(), 32, 26);
+    let near = (shown[..3].iter().zip([0.2, 0.6, 0.3])).all(|(a, b)| (a - b).abs() < 2e-3);
+    assert!(near, "{shown:?}");
 }
 
 #[test]

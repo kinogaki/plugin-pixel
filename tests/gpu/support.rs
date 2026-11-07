@@ -106,6 +106,24 @@ pub fn surface(color: [f64; 3]) -> Prim {
     })
 }
 
+/// MaterialX's Surface Unlit of `color`, shown by a Surface Material.
+pub fn unlit(color: [f64; 3]) -> Prim {
+    use kinogaki_render_api::material::mtlx::def;
+    let values: Parameters = [("emission_color".to_owned(), Value::Color(color))].into();
+    let mut built = MaterialNetwork::builder();
+    let surface = built
+        .node(&def("ND_surface_unlit").unwrap(), &values)
+        .unwrap();
+    let material = def("ND_surfacematerial").unwrap();
+    let shown = built.node(&material, &Parameters::new()).unwrap();
+    built.link(surface, "out", shown, "surfaceshader").unwrap();
+    Prim::Material(Material {
+        network: Arc::new(built.build(shown).expect("a network")),
+        path: Arc::from("/Materials/Unlit"),
+        double_sided: true,
+    })
+}
+
 /// The scene's prims: materials 0 and 1, the floor 2, the box 3, a sun 4
 /// and a sky 5.
 pub fn scene() -> SceneUpdate {

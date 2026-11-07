@@ -99,6 +99,9 @@ pub struct Surface {
     pub translucency: f32,
     /// What that light is tinted by.
     pub translucency_color: [f32; 3],
+    /// Unlit (MaterialX's Surface Unlit): what every ray sees is its color,
+    /// whatever lights it.
+    pub unlit: bool,
 }
 
 impl Default for Surface {
@@ -108,6 +111,7 @@ impl Default for Surface {
             color: [0.8; 3],
             translucency: 0.0,
             translucency_color: [1.0; 3],
+            unlit: false,
         }
     }
 }

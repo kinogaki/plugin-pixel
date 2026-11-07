@@ -1,7 +1,8 @@
 // The shade pass: direct + ambient + indirect + rim light quantized by its
 // luminance to shade_levels levels, an ordered Bayer dither between
 // adjacent levels (anchored to film pixels), each level its Shade Ramp
-// color in the light's chromaticity, × albedo; then the volumes over it
+// color in the light's chromaticity, × albedo (an unlit surface's albedo
+// alone); then the volumes over it
 // (the volume pass's L and 1 − T: L_surface · T + L, with 1 − T and the
 // media's own light, L / (1 − T), through the Shade Ramp, on the volumes'
 // own levels and dither); then, unless the fog is lit (and so among the
@@ -17,6 +18,7 @@
 @group(0) @binding(7) var depth_tex: texture_2d<f32>;
 @group(0) @binding(8) var volume_tex: texture_2d<f32>;
 @group(0) @binding(9) var beauty_out: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(10) var transmit_tex: texture_2d<f32>;
 
 // ACEScg luminance (dither::ACESCG_LUMINANCE).
 const LUMINANCE: vec3<f32> = vec3<f32>(0.2722287, 0.6740818, 0.0536895);
@@ -141,7 +143,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lit = select(0.0, 1.0, dot(direct, LUMINANCE) > 1e-4);
     light += (frame.rim_all.rgb + frame.rim.rgb * lit) * edge;
     let albedo = textureLoad(albedo_tex, p, 0).rgb;
-    let shaded = over(albedo * shade(light, t, false), p, t).rgb;
+    let unlit = textureLoad(transmit_tex, p, 0).w > 0.5;
+    let shaded = over(select(albedo * shade(light, t, false), albedo, unlit), p, t).rgb;
     // Fog to the surface, along the view.
     let depth = textureLoad(depth_tex, p, 0).x;
     let reach = length(world_position(p, depth) - origin);

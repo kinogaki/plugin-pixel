@@ -3,7 +3,7 @@
 // (the material's color × the vertex tint, its color attribute: blended
 // across a triangle, flat where the tint is a primitive's), normal (world,
 // facing the camera), depth (along the view direction), object id and the
-// material's transmittance (light through its back face).
+// material's transmittance (light through its back face; w: 1 when unlit).
 
 struct VertexIn {
     @location(0) position: vec3<f32>,
@@ -57,6 +57,6 @@ fn fs(v: VertexOut) -> Targets {
     out.normal = vec4<f32>(n, 0.0);
     out.depth = dot(v.world - frame.eye.xyz, -frame.back.xyz);
     out.id = object.id.x;
-    out.transmit = vec4<f32>(object.transmit.rgb, 0.0);
+    out.transmit = object.transmit;
     return out;
 }

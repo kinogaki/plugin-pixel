@@ -400,15 +400,22 @@ mod tests {
         assert_eq!((first.0.clone(), second.0.clone()), (0..6, 6..12));
         let root = m.nodes[second.1 as usize];
         assert!(root.count > 0 && root.a >= meshes[0].bvh.triangles.len() as u32);
-        let surfaces = [crate::render::Surface {
-            color: [0.2, 0.3, 0.4],
-            translucency: 0.5,
-            translucency_color: [1.0, 0.5, 0.0],
-        }];
+        let surfaces = [
+            crate::render::Surface {
+                color: [0.2, 0.3, 0.4],
+                translucency: 0.5,
+                translucency_color: [1.0, 0.5, 0.0],
+                unlit: false,
+            },
+            crate::render::Surface {
+                unlit: true,
+                ..Default::default()
+            },
+        ];
         let placed = [
             instance(1, 0.0, 0),
             instance(0, 2.0, 3),
-            instance(1, 4.0, 0),
+            instance(1, 4.0, 1),
         ];
         let i = Instances::build(&placed, &m, &meshes, &surfaces);
         // Two draws: mesh 0 once, mesh 1 twice.
@@ -419,7 +426,9 @@ mod tests {
         assert_eq!(of(0.0).albedo, [0.2, 0.3, 0.4, 0.0]);
         assert_eq!(of(0.0).transmit, [0.5, 0.25, 0.0, 0.0]);
         assert_eq!(of(0.0).id, [7, second.1, 0, 0]);
-        // A material past the table is the default surface.
+        // An unlit one says so in its transmittance's w; a material past the
+        // table is the default surface.
+        assert_eq!(of(4.0).transmit, [0.0, 0.0, 0.0, 1.0]);
         assert_eq!(of(2.0).albedo, [0.8, 0.8, 0.8, 0.0]);
     }
 
