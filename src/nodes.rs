@@ -553,6 +553,18 @@ mod tests {
             panic!("a surface");
         };
         assert_eq!((s.color, s.unlit), ([0.9, 0.5, 0.1], false));
+        // USD Preview Surface: lit, its diffuse color, its emission and
+        // cutout aside (a Pixel Surface has neither).
+        let leaf = [
+            ("diffuseColor", Value::Color([0.2, 0.6, 0.3])),
+            ("emissiveColor", Value::Color([0.5, 0.5, 0.5])),
+            ("opacityThreshold", Value::Number(0.5)),
+        ];
+        let usd = shown("ND_UsdPreviewSurface_surfaceshader", &leaf, None);
+        let Material::Surface(s, _) = material(&engines.adopt(&usd, pixel.id())) else {
+            panic!("a surface");
+        };
+        assert_eq!((s.color, s.unlit), ([0.2, 0.6, 0.3], false));
         // Surface Unlit of an image: as it is, the image cut and named.
         let image = Some(("ND_image_color3", &[][..], "emission_color"));
         let lamp = engines.adopt(&shown("ND_surface_unlit", &[], image), pixel.id());
