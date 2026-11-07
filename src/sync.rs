@@ -15,10 +15,13 @@
 //!   material is a Pixel Volume become that volume's bounds instead, in
 //!   world space, and are not drawn. A material's color attribute becomes
 //!   each corner's tint (vertex, point, primitive or detail values; white
-//!   where a shape lacks it); `N` its shading normals.
+//!   where a shape lacks it), and a glTF color image's vertex alpha (the
+//!   mesh's `Alpha`; opaque where it lacks it) what the corner multiplies
+//!   the texture's alpha by; `N` its shading normals.
 //! - **Materials** become surfaces and media ([`nodes::material`]); a
 //!   surface's texture samples the picture its Texture prim holds (linear
-//!   ACEScg, made straight, its longer side at most [`MAX_PICTURE`] texels:
+//!   ACEScg, made straight where the host premultiplied it, its longer side
+//!   at most [`MAX_PICTURE`] texels:
 //!   halved until it is), each corner reading the coordinates its primvar
 //!   holds.
 //! - **Declared prims** become lights: the domes add up into the ambient
@@ -35,7 +38,7 @@
 use crate::gpu::Changed;
 use crate::gpu::MAX_VOLUMES;
 use crate::lights::{self, RIM_LIGHT};
-use crate::nodes::{self, Material};
+use crate::nodes::{self, Look, Material};
 use crate::render::{
     Ambient, Corners, Fog, Instance, Light, LightShape, Mesh, Picture, Rims, Scene, Surface,
     Texture, Volume,
@@ -251,7 +254,7 @@ impl Sync {
         let shape_of = |m: &(Material, u32)| match &m.0 {
             Material::Surface(_, look) => {
                 let uv = look.texture.as_ref().map(|t| t.uv.clone());
-                Some((look.tint().cloned(), uv, m.1))
+                Some((look.tint().cloned(), look.alpha().cloned(), uv, m.1))
             }
             Material::Volume(_) => None,
         };
@@ -422,11 +425,12 @@ impl Sync {
             groups.entry(material).or_default().push(t);
         }
         for (material, ts) in groups {
-            let corners = |list: &[[f32; 3]]| -> Vec<[f32; 3]> {
+            // The group's triangles' corners of a list of a shape's.
+            fn of<T: Copy>(ts: &[usize], list: &[T]) -> Vec<T> {
                 ts.iter()
                     .flat_map(|&t| (0..3).map(move |k| list[3 * t + k]))
                     .collect()
-            };
+            }
             let group: Vec<[u32; 3]> = ts.iter().map(|&t| triangles[t]).collect();
             match self.material(material) {
                 Material::Volume(_) => {
@@ -434,17 +438,12 @@ impl Sync {
                     made.volumes.push((material, corners.collect()));
                 }
                 Material::Surface(_, look) => {
-                    let tints = look.tint().and_then(|a| shape.corners::<3>(triangles, a));
                     let uvs =
                         (look.texture.as_ref()).and_then(|t| shape.corners::<2>(triangles, &t.uv));
                     let held = Corners {
-                        normals: normals.as_deref().map(corners),
-                        tints: tints.as_deref().map(corners),
-                        uvs: uvs.as_deref().map(|list| {
-                            ts.iter()
-                                .flat_map(|&t| (0..3).map(move |k| list[3 * t + k]))
-                                .collect()
-                        }),
+                        normals: normals.as_deref().map(|n| of(&ts, n)),
+                        tints: tints(shape, triangles, look).map(|t| of(&ts, &t)),
+                        uvs: uvs.as_deref().map(|uv| of(&ts, uv)),
                     };
                     let mesh = Mesh::new(points.as_slice(), &group, held);
                     made.meshes.push((material, Arc::new(mesh)));
@@ -582,6 +581,25 @@ struct Placed {
     round: bool,
 }
 
+/// What `shape`'s corners (three a triangle of `triangles`) multiply the
+/// albedo and the texture's alpha by under `look`: its tint attribute's
+/// color (white where the shape lacks it) and its alpha attribute's value
+/// (opaque where it lacks it); none where it reads neither.
+fn tints(shape: &Shape, triangles: &[[u32; 3]], look: &Look) -> Option<Vec<[f32; 4]>> {
+    let colors = look.tint().and_then(|a| shape.corners::<3>(triangles, a));
+    let alphas = look.alpha().and_then(|a| shape.corners::<1>(triangles, a));
+    if colors.is_none() && alphas.is_none() {
+        return None;
+    }
+    let corners = triangles.len() * 3;
+    let tint = |c: usize| {
+        let [r, g, b] = colors.as_ref().map_or([1.0; 3], |list| list[c]);
+        let [a] = alphas.as_ref().map_or([1.0], |list| list[c]);
+        [r, g, b, a]
+    };
+    Some((0..corners).map(tint).collect())
+}
+
 /// One of the instances placing a shape, outermost first: an Instancer's
 /// prim, itself and the instance.
 type Level<'a> = (PrimId, &'a Instancer, usize);
@@ -647,13 +665,15 @@ fn fog_of(fog: standard::Fog) -> Fog {
 pub const MAX_PICTURE: u32 = 2048;
 
 /// `image`'s main layer as a picture: its display window's texels, rows from
-/// the top, straight where the host premultiplied them; a grey one grey in
-/// every channel.
+/// the top, made straight where its encoding says the host premultiplied
+/// them (colors; data comes straight); a grey one grey in every channel.
 fn picture(image: &Image) -> Picture {
     let window = image.display();
     let [w, h] = window.size();
     let [x0, y0] = window.min();
-    let channels = (image.layers().first()).map_or(4, |l| l.format().channels.len());
+    let main = image.layers().first().map(|l| l.format());
+    let channels = main.map_or(4, |f| f.channels.len());
+    let premultiplied = main.is_some_and(|f| f.encoding.premultiplied());
     let mut texels = Vec::with_capacity(w as usize * h as usize);
     for y in 0..h as i32 {
         for x in 0..w as i32 {
@@ -664,7 +684,10 @@ fn picture(image: &Image) -> Picture {
                 3 => [r, g, b, 1.0],
                 _ => [r, g, b, a],
             };
-            texels.push(straight(rgba));
+            texels.push(match premultiplied {
+                true => straight(rgba),
+                false => rgba,
+            });
         }
     }
     let mut picture = Picture::new([w, h], texels);

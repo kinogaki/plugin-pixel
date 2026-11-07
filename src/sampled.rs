@@ -2,10 +2,11 @@
 //! MaterialX's `image` and glTF's texture nodes (`gltf_image`,
 //! `gltf_colorimage`, and Kinogaki's with glTF's minification filter), read
 //! natively: the coordinate set and placement (a `texcoord` or
-//! `geompropvalue` node, a `place2d`, a glTF texture's own offset, rotation
-//! and scale, by the graphs MaterialX defines them with), each axis's wrap,
-//! the filter (`closest` is the nearest texel) and the factors multiplying
-//! the texel.
+//! `geompropvalue` node, a `place2d` of one or of its own coordinates, a
+//! glTF texture's own offset, rotation and scale, by the graphs MaterialX
+//! defines them with), each axis's wrap, the filter (`closest` is the
+//! nearest texel), the factors multiplying the texel and the vertex colors
+//! and alpha glTF's color image multiplies it by.
 use crate::render::Wrap;
 use kinogaki_render_api::geometry::image::ImageSource;
 use kinogaki_render_api::geometry::names;
@@ -47,6 +48,9 @@ pub struct Sampled {
     pub factor: [f32; 4],
     /// The attribute multiplying it too (glTF's vertex colors).
     pub tint: Option<Arc<str>>,
+    /// The attribute multiplying its alpha (glTF's vertex colors' alpha,
+    /// MaterialX's geometric color4's fourth: the mesh's `Alpha`).
+    pub alpha: Option<Arc<str>>,
 }
 
 /// Whether node `at` of `network` is a texture node Pixel samples.
@@ -115,7 +119,7 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
         (false, Some(Value::Number(f))) => [*f as f32, *f as f32, *f as f32, 1.0],
         (false, factor) => four(factor),
     };
-    let tint = driver(network, at, "geomcolor").map(|_| Arc::from(names::CD));
+    let vertex = driver(network, at, "geomcolor").is_some();
     Some(Sampled {
         source: node.images.get("file").cloned(),
         image: node.textures.get("file").map(|id| id.prim()),
@@ -124,7 +128,8 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
         wrap: [wrap("uaddressmode"), wrap("vaddressmode")],
         nearest: choice("filtertype") == Some("closest"),
         factor,
-        tint,
+        tint: vertex.then(|| Arc::from(names::CD)),
+        alpha: vertex.then(|| Arc::from(names::ALPHA)),
     })
 }
 
@@ -206,7 +211,8 @@ fn gltf_placement(network: &MaterialNetwork, at: u32, color: bool) -> Affine {
 
 /// Node `at`'s coordinates as an affine map of a coordinate set's, and that
 /// set's primvar: a `texcoord` (`uv`, `uv2`…), a `geompropvalue`, or a
-/// `place2d` of either.
+/// `place2d` of either or of its own coordinates (its `texcoord` value,
+/// (0, 0) by default, when nothing drives it: a map of no set's).
 fn affine(network: &MaterialNetwork, at: u32) -> Option<(Affine, Arc<str>)> {
     match kind(network, at) {
         "texcoord" => {
@@ -226,7 +232,10 @@ fn affine(network: &MaterialNetwork, at: u32) -> Option<(Affine, Arc<str>)> {
         "place2d" => {
             let (inner, set) = match driver(network, at, "texcoord") {
                 Some(from) => affine(network, from)?,
-                None => (IDENTITY, Arc::from(names::UV)),
+                None => {
+                    let [u, v] = pair(network, at, "texcoord", [0.0; 2]);
+                    ([[0.0, 0.0, u], [0.0, 0.0, v]], Arc::from(names::UV))
+                }
             };
             let placed = place2d(
                 pair(network, at, "pivot", [0.0; 2]),
@@ -321,6 +330,32 @@ mod tests {
         }
     }
 
+    /// A `place2d` whose coordinates nothing drives places its own value,
+    /// as MaterialX defines: every point reads one texel.
+    #[test]
+    fn an_undriven_place2d_places_its_own_coordinates() {
+        let mut built = MaterialNetwork::builder();
+        let image = node(&mut built, "ND_image_color3", &[]);
+        let place = node(
+            &mut built,
+            "ND_place2d_vector2",
+            &[
+                ("texcoord", Value::Numbers(vec![0.5, 0.0])),
+                ("offset", Value::Numbers(vec![-0.25, -0.25])),
+            ],
+        );
+        built.link(place, "out", image, "texcoord").unwrap();
+        let network = built.build(image).unwrap();
+        let read = sampled(&network, image).unwrap();
+        for uv in [[0.0, 0.0], [0.3, 0.9], [1.0, 1.0]] {
+            let at = evaluated(uv, read.transform.map(|r| r.map(f64::from)));
+            assert!(
+                (at[0] - 0.75).abs() < 1e-6 && (at[1] - 0.25).abs() < 1e-6,
+                "{uv:?}: {at:?}"
+            );
+        }
+    }
+
     #[test]
     fn an_image_reads_its_place2d_and_a_color_image_its_color_and_vertex_colors() {
         let mut built = MaterialNetwork::builder();
@@ -330,6 +365,8 @@ mod tests {
             "ND_place2d_vector2",
             &[("scale", Value::Numbers(vec![2.0, 2.0]))],
         );
+        let set = node(&mut built, "ND_texcoord_vector2", &[]);
+        built.link(set, "out", place, "texcoord").unwrap();
         built.link(place, "out", image, "texcoord").unwrap();
         let network = built.build(image).unwrap();
         let read = sampled(&network, image).unwrap();

@@ -3,7 +3,8 @@
 //! - **Pixel Surface** (`kinogaki.pixel.pixel_surface`): Color (a texture
 //!   node may drive it: its picture times its factor), times the attribute
 //!   its Color Attribute names (`Cd`) where a mesh has it; Cutout cuts it
-//!   out where the texture's alpha falls below it; Translucency makes it a
+//!   out where the texture's alpha (times glTF's vertex alpha) falls below
+//!   it; Translucency makes it a
 //!   thin surface: light reaching its back comes through × Translucency ×
 //!   Translucency Color × its color, and light passing it keeps ×
 //!   Translucency × Translucency Color.
@@ -269,6 +270,12 @@ impl Look {
     /// texture's (glTF's vertex colors).
     pub fn tint(&self) -> Option<&Arc<str>> {
         (self.attribute.as_ref()).or_else(|| self.texture.as_ref()?.tint.as_ref())
+    }
+
+    /// The attribute multiplying its texture's alpha at each corner (glTF's
+    /// vertex alpha).
+    pub fn alpha(&self) -> Option<&Arc<str>> {
+        self.texture.as_ref()?.alpha.as_ref()
     }
 }
 

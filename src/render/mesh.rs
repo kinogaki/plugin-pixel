@@ -12,9 +12,10 @@ pub struct Mesh {
     pub positions: Vec<[f32; 3]>,
     /// Each vertex's shading normal: as held, else its triangle's own (flat).
     pub normals: Vec<[f32; 3]>,
-    /// What each vertex's albedo is multiplied by (the material's color
-    /// attribute; none: white).
-    pub tints: Option<Vec<[f32; 3]>>,
+    /// What each vertex's albedo (rgb) and its texture's alpha (a) are
+    /// multiplied by: the material's color attribute and glTF's vertex
+    /// alpha (none: white, opaque).
+    pub tints: Option<Vec<[f32; 4]>>,
     /// Each vertex's texture coordinates, which the material's texture
     /// reads (none: it has none).
     pub uvs: Option<Vec<[f32; 2]>>,
@@ -30,8 +31,9 @@ pub struct Mesh {
 pub struct Corners {
     /// Shading normals (none: flat).
     pub normals: Option<Vec<[f32; 3]>>,
-    /// What the albedo is multiplied by (none: white).
-    pub tints: Option<Vec<[f32; 3]>>,
+    /// What the albedo and the texture's alpha are multiplied by (none:
+    /// white, opaque).
+    pub tints: Option<Vec<[f32; 4]>>,
     /// Texture coordinates (none: none).
     pub uvs: Option<Vec<[f32; 2]>>,
 }
@@ -117,7 +119,7 @@ impl Mesh {
 struct Corner {
     position: [f32; 3],
     normal: [f32; 3],
-    tint: Option<[f32; 3]>,
+    tint: Option<[f32; 4]>,
     uv: Option<[f32; 2]>,
 }
 
@@ -142,7 +144,7 @@ mod tests {
         assert_eq!(flat.triangles, [[0, 1, 2], [0, 2, 3]]);
         assert!(flat.normals.iter().all(|n| *n == [0.0, 0.0, 1.0]));
         let up = Some(vec![[0.0, 0.0, 1.0]; 6]);
-        let tints = Some(vec![[0.5; 3]; 6]);
+        let tints = Some(vec![[0.5; 4]; 6]);
         let smooth = Mesh::new(
             &SQUARE,
             &HALVES,
@@ -191,7 +193,7 @@ mod tests {
         assert_ne!(up(mesh.triangles[1][0]), [0.0, 0.0, 1.0]);
         // What it holds that doesn't match its corners is dropped.
         let short = Corners {
-            tints: Some(vec![[1.0; 3]; 5]),
+            tints: Some(vec![[1.0; 4]; 5]),
             ..Corners::default()
         };
         assert_eq!(Mesh::new(&SQUARE, &HALVES, short).tints, None);

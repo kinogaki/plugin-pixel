@@ -103,8 +103,8 @@ fn a_shape_is_a_world_space_mesh_tinted_by_its_material_attribute() {
     assert!(placed(scene, 0).iter().all(|p| p[2] == 5.0));
     assert_eq!(
         mesh.tints.as_deref().map(|t| t[0]),
-        Some([0.5; 3]),
-        "Cd, the default attribute"
+        Some([0.5, 0.5, 0.5, 1.0]),
+        "Cd, the default attribute, opaque"
     );
     assert_eq!(
         scene.surfaces[instance.surface as usize].color,
@@ -420,8 +420,18 @@ fn textured(texture: PrimId) -> Prim {
 /// A 2 × 1 picture: `left` then `right`, rgba, premultiplied as the host
 /// sends colors.
 fn picture(left: [f32; 4], right: [f32; 4]) -> Prim {
-    use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample};
-    let format = Format::rgba(Sample::F32, Encoding::color("ACEScg", true));
+    use kinogaki_render_api::geometry::image::Encoding;
+    encoded(left, right, Encoding::color("ACEScg", true))
+}
+
+/// [`picture`] of values `encoding` says what they are.
+fn encoded(
+    left: [f32; 4],
+    right: [f32; 4],
+    encoding: kinogaki_render_api::geometry::image::Encoding,
+) -> Prim {
+    use kinogaki_render_api::geometry::image::{Format, Image, Rect, Sample};
+    let format = Format::rgba(Sample::F32, encoding);
     let texels = [left, right].concat();
     let image = Image::builder(Rect::new([0, 0], [2, 1]).unwrap())
         .plane(format, bytemuck::cast_slice(&texels))
@@ -474,4 +484,71 @@ fn a_texture_samples_its_prims_picture_at_each_corners_coordinates() {
     });
     assert!(changed.surfaces);
     assert_eq!(sync.scene().pictures[0].texels[0], [0.0, 1.0, 0.0, 1.0]);
+}
+
+/// A picture of data comes straight (only colors a host premultiplies are
+/// divided by their alpha).
+#[test]
+fn a_texture_of_data_keeps_its_values() {
+    use kinogaki_render_api::geometry::image::Encoding;
+    let mut sync = Sync::default();
+    let half = [0.25, 0.25, 0.25, 0.5];
+    sync.apply(added(vec![
+        (id(0), textured(id(2))),
+        (id(1), Prim::Shape(square(Some(id(0)), [1.0; 3]))),
+        (id(2), encoded([1.0; 4], half, Encoding::Raw)),
+    ]));
+    assert_eq!(sync.scene().pictures[0].texels[1], half);
+}
+
+/// glTF's color image with vertex colors: its alpha times the mesh's
+/// `Alpha` (opaque where the mesh has none) rides with each corner's tint.
+#[test]
+fn a_gltf_color_image_reads_the_vertex_alpha() {
+    use kinogaki_render_api::geometry::image::ImageSource;
+    use kinogaki_render_api::material::mtlx::def;
+    let description = kinogaki_pixel::description::description();
+    let surface = description.node_def(SURFACE).unwrap().clone();
+    let mut built = MaterialNetwork::builder();
+    let s = built.node(&surface, &Parameters::new()).unwrap();
+    let image = (built.node(
+        &def("ND_kinogaki_gltf_colorimage").unwrap(),
+        &Parameters::new(),
+    ))
+    .unwrap();
+    let vertex = built
+        .node(&def("ND_geomcolor_color4").unwrap(), &Parameters::new())
+        .unwrap();
+    built
+        .image(image, "file", ImageSource::path("/t/two.png"))
+        .unwrap();
+    built.link(vertex, "out", image, "geomcolor").unwrap();
+    built.link(image, "outcolor", s, "color").unwrap();
+    let mut network = built.build(s).unwrap();
+    network.nodes_mut()[image as usize]
+        .textures
+        .insert("file".to_owned(), Id::of(id(2)));
+    let material = Prim::Material(Material {
+        network: Arc::new(network),
+        path: Arc::from("/m"),
+        double_sided: true,
+    });
+    let alpha = Attribute::tuples(vec![0.25f32; 4], Meaning::None).unwrap();
+    let faded = (square(Some(id(0)), [0.5; 3]).rebuilt())
+        .primvar(Domain::Point, names::ALPHA, alpha)
+        .build()
+        .unwrap();
+    for (shape, expected) in [
+        (faded, [0.5, 0.5, 0.5, 0.25]),
+        (square(Some(id(0)), [0.5; 3]), [0.5, 0.5, 0.5, 1.0]),
+    ] {
+        let mut sync = Sync::default();
+        sync.apply(added(vec![
+            (id(0), material.clone()),
+            (id(1), Prim::Shape(shape)),
+            (id(2), picture([1.0; 4], [1.0; 4])),
+        ]));
+        let tints = sync.scene().meshes[0].tints.clone();
+        assert_eq!(tints.map(|t| t[0]), Some(expected));
+    }
 }

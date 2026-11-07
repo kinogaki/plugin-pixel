@@ -4,8 +4,8 @@
 // across a triangle, flat where the tint is a primitive's, or its instance's
 // own color, × its texture:
 // the picture at the transformed coordinates, its nearest texel or four
-// blended, each axis wrapped, × its factor; where the texture's alpha is
-// below a cutout, nothing), normal (world, facing the camera), depth (along
+// blended, each axis wrapped, × its factor; where the texture's alpha × the
+// vertex alpha is below a cutout, nothing), normal (world, facing the camera), depth (along
 // the view direction), object id and the material's transmittance (light
 // through its back face; w: 1 when unlit).
 
@@ -14,7 +14,8 @@
 struct VertexIn {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) tint: vec3<f32>,
+    // rgb: what the albedo is multiplied by; a: the texture's alpha.
+    @location(2) tint: vec4<f32>,
     // The instance placing it (one a drawn instance).
     @location(3) instance: u32,
     @location(4) uv: vec2<f32>,
@@ -25,7 +26,7 @@ struct VertexOut {
     @location(0) world: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) @interpolate(flat) instance: u32,
-    @location(3) tint: vec3<f32>,
+    @location(3) tint: vec4<f32>,
     @location(4) uv: vec2<f32>,
 }
 
@@ -120,11 +121,11 @@ fn fs(v: VertexOut) -> Targets {
         n = -n;
     }
     let picture = textured(object, v.uv);
-    if (object.texture.w & 64u) != 0u && picture.a < object.uv_s.w {
+    if (object.texture.w & 64u) != 0u && picture.a * v.tint.a < object.uv_s.w {
         discard;
     }
     var out: Targets;
-    out.albedo = vec4<f32>(object.albedo.rgb * tinted(object, v.tint) * picture.rgb, 1.0);
+    out.albedo = vec4<f32>(object.albedo.rgb * tinted(object, v.tint.rgb) * picture.rgb, 1.0);
     out.normal = vec4<f32>(n, 0.0);
     out.depth = dot(v.world - frame.eye.xyz, -frame.back.xyz);
     out.id = object.id.x;

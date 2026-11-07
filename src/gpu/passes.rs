@@ -34,7 +34,7 @@ pub struct Groups {
 
 /// A vertex's position, normal, tint and texture coordinates.
 const ATTRIBUTES: [wgpu::VertexAttribute; 4] =
-    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 4 => Float32x2];
+    wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 4 => Float32x2];
 /// The instance a drawn instance is.
 const INSTANCE: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![3 => Uint32];
 

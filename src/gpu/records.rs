@@ -28,8 +28,9 @@ pub struct Vertex {
     pub position: [f32; 3],
     /// Its shading normal (not unit).
     pub normal: [f32; 3],
-    /// What the material's color is multiplied by.
-    pub tint: [f32; 3],
+    /// What the material's color (rgb) and its texture's alpha (a) are
+    /// multiplied by.
+    pub tint: [f32; 4],
     /// Its texture coordinates.
     pub uv: [f32; 2],
 }

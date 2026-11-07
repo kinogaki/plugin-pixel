@@ -62,7 +62,7 @@ impl Meshes {
             triangles: Vec::new(),
         };
         for mesh in meshes {
-            let tint = |v: u32| mesh.tints.as_ref().map_or([1.0; 3], |c| c[v as usize]);
+            let tint = |v: u32| mesh.tints.as_ref().map_or([1.0; 4], |c| c[v as usize]);
             let base = made.vertices.len() as u32;
             made.vertices
                 .extend((0..mesh.positions.len()).map(|v| Vertex {
@@ -488,7 +488,7 @@ mod tests {
 
     fn quad(z: f32) -> Mesh {
         let (points, triangles) = square(z);
-        let tints = Some(vec![[0.5; 3]; 6]);
+        let tints = Some(vec![[0.5; 4]; 6]);
         let held = crate::render::Corners {
             tints,
             ..Default::default()
