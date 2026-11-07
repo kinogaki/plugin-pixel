@@ -283,6 +283,46 @@ fn a_prototype_renders_only_through_its_instancer_with_its_materials() {
     );
 }
 
+/// An instance's material map renders its prototype's red triangles in
+/// blue; the other instance keeps red; both place the one shape's meshes
+/// by its own materials, the mapped one through a mesh made once for its
+/// map.
+#[test]
+fn an_instances_material_map_renders_its_prototypes_materials_as_others() {
+    use kinogaki_render_api::MaterialMaps;
+    let mut sync = Sync::default();
+    let red = material(SURFACE, &[("color", Value::Color([1.0, 0.0, 0.0]))]);
+    let blue = material(SURFACE, &[("color", Value::Color([0.0, 0.0, 1.0]))]);
+    let xforms: Column<Xform> = [1.0, 3.0]
+        .map(|x| Xform::translation(Vec3::new(x, 0.0, 0.0)))
+        .to_vec()
+        .into();
+    let map = Arc::from([(Id::<Material>::of(id(0)), Id::<Material>::of(id(1)))]);
+    let instancer = Instancer::builder(vec![id(2)], xforms)
+        .material_maps(MaterialMaps::new(
+            vec![Subsets::DEFAULT, 0].into(),
+            vec![map],
+        ))
+        .build()
+        .unwrap();
+    sync.apply(added(vec![
+        (id(0), red),
+        (id(1), blue),
+        (id(2), Prim::Shape(square(Some(id(0)), [1.0; 3]))),
+        (id(3), Prim::Instancer(instancer)),
+    ]));
+    let scene = sync.scene();
+    assert_eq!(scene.instances.len(), 2);
+    let color = |x: f32| {
+        let k = (0..2)
+            .find(|&k| placed(scene, k).iter().any(|p| p[0] == x))
+            .unwrap();
+        scene.surfaces[scene.instances[k].surface as usize].color
+    };
+    assert_eq!(color(1.0), [1.0, 0.0, 0.0], "its prototype's own");
+    assert_eq!(color(3.0), [0.0, 0.0, 1.0], "mapped");
+}
+
 /// Instances differ by their own primvars: each instance's `Cd` stands for
 /// its prototype's corners' (the Pixel Surface reads `Cd`), and its `id` is
 /// its object id; an Instancer's whole `Cd` colors each of its instances,

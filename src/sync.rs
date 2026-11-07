@@ -64,9 +64,9 @@ pub struct Sync {
     pictures: BTreeMap<PrimId, Arc<Picture>>,
     /// The Material prim each of the scene's volumes is filled by.
     filled_by: Vec<Option<PrimId>>,
-    /// What each placed shape makes, by the shape and the material an
-    /// instance overrides its own with.
-    made: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
+    /// What each placed shape makes, by the shape and what an instance
+    /// renders it with in place of its own materials.
+    made: BTreeMap<(PrimId, Instead), Arc<Made>>,
     settings: SceneSettings,
     scene: Scene,
     /// What it can't render as sent, by what found it.
@@ -321,7 +321,7 @@ impl Sync {
                 _ if named.contains(id) => {}
                 Prim::Shape(shape) if shape.visibility().visible => {
                     let at = shape.xform().at(0.0);
-                    self.place((*id, shape), &at, None, &[], &mut placed);
+                    self.place((*id, shape), &at, Instead::Nothing, &[], &mut placed);
                 }
                 Prim::Instancer(inst) if inst.visibility().visible => {
                     let at = inst.xform().at(0.0);
@@ -364,12 +364,12 @@ impl Sync {
     ) {
         for (i, xform) in instancer.xforms().iter().enumerate() {
             let at = above.compose(xform);
-            let material = instancer.subsets().of(i).map(|m| m.prim());
+            let instead = Instead::of(instancer, i);
             let prototype = instancer.prototype_of(i);
             chain.push((id, instancer, i));
             match self.prims.get(&prototype) {
                 Some(Prim::Shape(shape)) => {
-                    self.place((prototype, shape), &at, material, chain, placed);
+                    self.place((prototype, shape), &at, instead, chain, placed);
                 }
                 Some(Prim::Instancer(_)) if chain.iter().any(|(on, ..)| *on == prototype) => {
                     placed.round = true;
@@ -383,14 +383,15 @@ impl Sync {
         }
     }
 
-    /// Shape `id` placed by `at`, its materials overridden by `instead`, as
+    /// Shape `id` placed by `at`, rendering with `instead` in place of its
+    /// own materials, as
     /// the instances of `chain` place it (none: on its own): an instance of
     /// each of its meshes, and its volumes in world space.
     fn place(
         &self,
         (id, shape): (PrimId, &Shape),
         at: &Xform,
-        instead: Option<PrimId>,
+        instead: Instead,
         chain: &[Level<'_>],
         placed: &mut Placed,
     ) {
@@ -402,11 +403,13 @@ impl Sync {
                 .map_or(*i as u32 + 1, |id| id as u32),
             None => id.slot + 1,
         };
-        let key = (id, instead);
-        let made = match placed.made.get(&key).or_else(|| placed.kept.get(&key)) {
+        let made = match (placed.made.get(&(id, instead.clone())))
+            .or_else(|| placed.kept.get(&(id, instead.clone())))
+        {
             Some(made) => made.clone(),
-            None => Arc::new(self.make(shape, instead)),
+            None => Arc::new(self.make(shape, &instead)),
         };
+        let key = (id, instead);
         let (to_world, to_own) = (rows(at), at.inverse().map(|back| rows(&back)));
         for (material, mesh) in &made.meshes {
             let index = *placed.index.entry(Arc::as_ptr(mesh)).or_insert_with(|| {
@@ -448,10 +451,10 @@ impl Sync {
         placed.made.insert(key, made);
     }
 
-    /// What `shape` makes with its materials overridden by `instead`, in its
-    /// own space: its triangles by material, meshes for surfaces and corners
-    /// for volumes.
-    fn make(&self, shape: &Shape, instead: Option<PrimId>) -> Made {
+    /// What `shape` makes rendering with `instead` in place of its own
+    /// materials, in its own space: its triangles by material, meshes for
+    /// surfaces and corners for volumes.
+    fn make(&self, shape: &Shape, instead: &Instead) -> Made {
         let mut made = Made::default();
         let Topology::Triangles(triangles) = shape.topology() else {
             return made;
@@ -462,7 +465,7 @@ impl Sync {
         // Triangles by the material they render with.
         let mut groups: BTreeMap<Option<PrimId>, Vec<usize>> = BTreeMap::new();
         for t in 0..triangles.len() {
-            let material = instead.or_else(|| shape.subsets().of(t).map(|m| m.prim()));
+            let material = instead.material(shape.subsets().of(t).map(|m| m.prim()));
             groups.entry(material).or_default().push(t);
         }
         for (material, ts) in groups {
@@ -606,13 +609,50 @@ impl Sync {
     }
 }
 
+/// What an instance renders the primitives of the shape it places with in
+/// place of their own materials.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Instead {
+    /// Their own.
+    Nothing,
+    /// The instance's own material, for every one.
+    Whole(PrimId),
+    /// Pairs of a material they name and the one the instance renders those
+    /// with.
+    Map(Arc<[(PrimId, PrimId)]>),
+}
+
+impl Instead {
+    /// What `instancer`'s instance `i` renders with.
+    fn of(instancer: &Instancer, i: usize) -> Self {
+        if let Some(whole) = instancer.subsets().of(i) {
+            return Self::Whole(whole.prim());
+        }
+        match instancer.material_maps().of(i) {
+            Some(map) => Self::Map(map.iter().map(|(a, b)| (a.prim(), b.prim())).collect()),
+            None => Self::Nothing,
+        }
+    }
+
+    /// The material a primitive naming `own` renders with.
+    fn material(&self, own: Option<PrimId>) -> Option<PrimId> {
+        match self {
+            Self::Nothing => own,
+            Self::Whole(whole) => Some(*whole),
+            Self::Map(pairs) => own.map(|own| {
+                (pairs.iter().find(|(from, _)| *from == own)).map_or(own, |&(_, to)| to)
+            }),
+        }
+    }
+}
+
 /// What placing the shapes makes.
 #[derive(Default)]
 struct Placed {
     /// What the shapes made before, taken as they are placed again.
-    kept: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
+    kept: BTreeMap<(PrimId, Instead), Arc<Made>>,
     /// What the placed shapes make.
-    made: BTreeMap<(PrimId, Option<PrimId>), Arc<Made>>,
+    made: BTreeMap<(PrimId, Instead), Arc<Made>>,
     meshes: Vec<Arc<Mesh>>,
     /// Each mesh's index in `meshes`.
     index: BTreeMap<*const Mesh, u32>,

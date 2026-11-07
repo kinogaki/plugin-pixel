@@ -41,7 +41,7 @@ Beauty, Albedo, Direct Light, Ambient Light, Indirect Light, Volume, Ambient Occ
 | `nodes`, `presets` | Pixel Surface and Pixel Volume, what a network renders as (Surface Unlit too), their display approximation, standard form and translation; the starting materials |
 | `sampled` | The texture nodes Pixel samples, read: coordinates, placement, wraps, filter, factors |
 | `lights` | The light and fog types and kinds; emissions as colors |
-| `sync` | The host's prims as the scene: each shape's meshes by material, kept while its dirty bits say only its placement, visibility or name changed, while it is hidden, and while no material it reads changes kind, tint, alpha or coordinates; every placement an instance, its own primvars giving its object id and the color and alpha its material reads; volumes, lights |
+| `sync` | The host's prims as the scene: each shape's meshes by material (an instance's own material or material map giving its own, once each), kept while its dirty bits say only its placement, visibility or name changed, while it is hidden, and while no material it reads changes kind, tint, alpha or coordinates; every placement an instance, its own primvars giving its object id and the color and alpha its material reads; volumes, lights |
 | `pictures` | Texture prims as the pictures surfaces sample |
 | `engine` | The render thread, the display images, final reads and previews; an update renders again the views whose scene or camera it changed |
 
