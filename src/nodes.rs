@@ -2,7 +2,8 @@
 //!
 //! - **Pixel Surface** (`kinogaki.pixel.pixel_surface`): Color (a texture
 //!   node may drive it: its picture times its factor), times the attribute
-//!   its Color Attribute names (`Cd`) where a mesh has it; Cutout cuts it
+//!   its Color Attribute names (`Cd`) where a mesh has it (a geometric
+//!   property reader driving Color: its default where not); Cutout cuts it
 //!   out where the texture's alpha (times glTF's vertex alpha) falls below
 //!   it; Translucency makes it a
 //!   thin surface: light reaching its back comes through × Translucency ×
@@ -236,6 +237,8 @@ pub fn defs() -> Vec<NodeDef> {
 }
 
 /// What a material renders as.
+// One a material, kept by value: its size does not matter.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Material {
     /// A surface, its color times what it reads of its mesh and images.
@@ -256,6 +259,9 @@ impl Default for Material {
 pub struct Look {
     /// The attribute tinting each corner (none: white).
     pub attribute: Option<Arc<str>>,
+    /// The tint where a mesh lacks the attribute: the default of the reader
+    /// naming it (none: white).
+    pub fallback: Option<[f32; 3]>,
     /// The texture it samples.
     pub texture: Option<Sampled>,
     /// The alpha below which the texture cuts the surface out.
@@ -377,25 +383,55 @@ pub fn material(network: &MaterialNetwork) -> Material {
 }
 
 /// What drives input `input` of node `at`: a texture node, read; a
-/// geometric color or property, its attribute.
+/// geometric color, its attribute; a geometric property reader, its
+/// attribute and default.
 fn read(network: &MaterialNetwork, at: NodeIndex, input: &str) -> Look {
     let Some(from) = driver(network, at, input) else {
         return Look::default();
     };
-    let node = &network.nodes()[from as usize];
-    let attribute = match node.def().mtlx().map(|d| d.node.as_str()) {
-        Some("geomcolor") => Some(Arc::from(names::CD)),
-        Some("geompropvalue") => node
-            .values()
-            .get("geomprop")
-            .and_then(Value::text)
-            .map(Arc::from),
-        _ => None,
-    };
+    let reader = named(network, from);
+    let fallback = reader.is_some().then(|| fallback(network, from)).flatten();
     Look {
-        attribute,
+        attribute: reader.or_else(|| attribute(network, from)),
+        fallback,
         texture: sampled(network, from),
         cutout: None,
+    }
+}
+
+/// The attribute node `at` reads: a geometric color's `Cd`, a geometric
+/// property reader's ([`named`]).
+fn attribute(network: &MaterialNetwork, at: NodeIndex) -> Option<Arc<str>> {
+    let def = network.nodes()[at as usize].def().mtlx()?;
+    match def.node.as_str() {
+        "geomcolor" => Some(Arc::from(names::CD)),
+        _ => named(network, at),
+    }
+}
+
+/// The attribute geometric property reader `at` names (MaterialX's
+/// `geompropvalue`, USD's Primvar Reader: [`mtlx::ATTRIBUTES`]); none for
+/// another node.
+pub(crate) fn named(network: &MaterialNetwork, at: NodeIndex) -> Option<Arc<str>> {
+    let node = &network.nodes()[at as usize];
+    let def = node.def().mtlx()?;
+    let (_, input) = mtlx::ATTRIBUTES.iter().find(|(n, _)| **n == *def.node)?;
+    let name = node.values().get(*input)?.text()?.trim();
+    (!name.is_empty()).then(|| Arc::from(name))
+}
+
+/// What reader `at` gives where a mesh lacks its attribute: its default
+/// (USD's `fallback`), a number spread to three.
+fn fallback(network: &MaterialNetwork, at: NodeIndex) -> Option<[f32; 3]> {
+    let values = network.nodes()[at as usize].values();
+    let held = values.get("default").or_else(|| values.get("fallback"))?;
+    match held {
+        Value::Number(n) => Some([*n as f32; 3]),
+        Value::Color(c) => Some(c.map(|v| v as f32)),
+        Value::Numbers(n) => Some(std::array::from_fn(|k| {
+            n.get(k).or(n.first()).map_or(0.0, |v| *v as f32)
+        })),
+        _ => None,
     }
 }
 
@@ -528,22 +564,15 @@ impl MaterialRules for Rules {
             return built.build(at).ok();
         }
         let base = driver(standard, at, "base_color");
-        let read = base.and_then(|b| {
-            let node = &standard.nodes()[b as usize];
-            match node.def().mtlx()?.node.as_str() {
-                "geomcolor" => Some("Cd"),
-                "geompropvalue" => node.values().get("geomprop")?.text(),
-                _ => None,
-            }
-        });
+        let read = base.and_then(|b| attribute(standard, b));
         let textured = base.filter(|&b| is_texture(standard, b));
         let white = read.is_some() || textured.is_some();
         let mut values: Parameters = match white {
             true => [("color".to_owned(), Value::Color([1.0; 3]))].into(),
             false => [("color".to_owned(), Value::Color(color("base_color")?))].into(),
         };
-        if let Some(name) = read {
-            values.insert("attribute".to_owned(), Value::Text(name.to_owned()));
+        if let Some(name) = &read {
+            values.insert("attribute".to_owned(), Value::Text(name.to_string()));
         }
         // glTF's mask: the opacity a cutoff compares the alpha with.
         let cutoff = driver(standard, at, "geometry_opacity").and_then(|o| {
@@ -557,20 +586,24 @@ impl MaterialRules for Rules {
         }
         let mut built = MaterialNetwork::builder();
         let shown = built.node(&Arc::new(surface()), &values).ok()?;
-        if let Some(t) = textured {
+        // Its texture drives its color, or the geometric property reader
+        // whose default shows where a mesh lacks the attribute.
+        let reader = base.filter(|&b| named(standard, b).is_some());
+        if let Some(t) = textured.or(reader) {
             drive(&mut built, (standard, t), (shown, "color"))?;
         }
         built.build(shown).ok()
     }
 }
 
-/// The output of texture node `at` that gives its color: `outcolor` of a
-/// glTF color image, else `out`.
+/// The output of node `at` that gives its color: `outcolor` of a glTF color
+/// image, `rgb` of a USD UV Texture, else `out`.
 fn output(network: &MaterialNetwork, at: NodeIndex) -> &'static str {
     let def = network.nodes()[at as usize].def().mtlx();
-    match def.is_some_and(|d| d.node.ends_with("colorimage")) {
-        true => "outcolor",
-        false => "out",
+    match def.map(|d| d.node.as_str()) {
+        Some(node) if node.ends_with("colorimage") => "outcolor",
+        Some("UsdUVTexture") => "rgb",
+        _ => "out",
     }
 }
 

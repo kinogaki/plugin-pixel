@@ -270,13 +270,14 @@ impl Sync {
         self.scene.surfaces = surfaces;
         self.scene.pictures = pictures;
         // What meshes take of a material: whether it is a volume, else its
-        // tint, alpha, coordinates and whether it cuts out.
+        // tint (and its default), alpha, coordinates and whether it cuts out.
         let meshes_of = |m: Option<&(Material, u32)>| {
             m.map(|(material, _)| match material {
                 Material::Surface(_, look) => {
                     let uv = look.texture.as_ref().map(|t| t.uv.clone());
                     let cut_out = look.cutout.is_some();
-                    Some((look.tint().cloned(), look.alpha().cloned(), uv, cut_out))
+                    let tint = (look.tint().cloned(), look.fallback);
+                    Some((tint, look.alpha().cloned(), uv, cut_out))
                 }
                 Material::Volume(_) => None,
             })
@@ -670,17 +671,19 @@ struct Placed {
 
 /// What `shape`'s corners (three a triangle of `triangles`) multiply the
 /// albedo and the texture's alpha by under `look`: its tint attribute's
-/// color (white where the shape lacks it) and its alpha attribute's value
-/// (opaque where it lacks it); none where it reads neither.
+/// color (its reader's default where the shape lacks it, else white) and
+/// its alpha attribute's value (opaque where it lacks it); none where it
+/// reads neither.
 fn tints(shape: &Shape, triangles: &[[u32; 3]], look: &Look) -> Option<Vec<[f32; 4]>> {
     let colors = look.tint().and_then(|a| shape.corners::<3>(triangles, a));
     let alphas = look.alpha().and_then(|a| shape.corners::<1>(triangles, a));
-    if colors.is_none() && alphas.is_none() {
+    let missing = look.fallback.filter(|_| colors.is_none());
+    if colors.is_none() && alphas.is_none() && missing.is_none() {
         return None;
     }
     let corners = triangles.len() * 3;
     let tint = |c: usize| {
-        let [r, g, b] = colors.as_ref().map_or([1.0; 3], |list| list[c]);
+        let [r, g, b] = (colors.as_ref()).map_or(missing.unwrap_or([1.0; 3]), |list| list[c]);
         let [a] = alphas.as_ref().map_or([1.0], |list| list[c]);
         [r, g, b, a]
     };

@@ -1,12 +1,13 @@
 //! The texture a material's color reads, as its texture node says:
-//! MaterialX's `image` and glTF's texture nodes (`gltf_image`,
-//! `gltf_colorimage`, and Kinogaki's with glTF's minification filter), read
-//! natively: the coordinate set and placement (a `texcoord` or
-//! `geompropvalue` node, a `place2d` of one or of its own coordinates, a
-//! glTF texture's own offset, rotation and scale, by the graphs MaterialX
-//! defines them with), each axis's wrap, the filter (`closest` is the
-//! nearest texel), the factors multiplying the texel and the vertex colors
-//! and alpha glTF's color image multiplies it by.
+//! MaterialX's `image`, glTF's texture nodes (`gltf_image`,
+//! `gltf_colorimage`, and Kinogaki's with glTF's minification filter) and
+//! USD's UV Texture, read natively: the coordinate set and placement (a
+//! `texcoord`, `geompropvalue` or USD Primvar Reader node, a `place2d` of
+//! one or of its own coordinates, a glTF texture's own offset, rotation and
+//! scale, by the graphs MaterialX defines them with), each axis's wrap, the
+//! filter (`closest` is the nearest texel), the factors multiplying the
+//! texel (a USD UV Texture's scale; its bias isn't read) and the vertex
+//! colors and alpha glTF's color image multiplies it by.
 use crate::render::Wrap;
 use kinogaki_render_api::geometry::image::ImageSource;
 use kinogaki_render_api::geometry::names;
@@ -15,13 +16,20 @@ use kinogaki_render_api::{MaterialNetwork, PrimId};
 use std::sync::Arc;
 
 /// The texture nodes Pixel samples.
-pub const NODES: [&str; 5] = [
+pub const NODES: [&str; 6] = [
     "image",
     "gltf_image",
     "gltf_colorimage",
     "kinogaki_gltf_image",
     "kinogaki_gltf_colorimage",
+    "UsdUVTexture",
 ];
+
+/// The node `at` is a USD UV Texture: its coordinates are `st`, its wraps
+/// `wrapS` and `wrapT`, its factor `scale`.
+fn usd(network: &MaterialNetwork, at: u32) -> bool {
+    kind(network, at) == "UsdUVTexture"
+}
 
 /// An affine map of texture coordinates, by rows: `(u, v, 1)` to `(s, t)`.
 type Affine = [[f64; 3]; 2];
@@ -100,15 +108,20 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
     let wrap = |name: &str| match choice(name) {
         Some("clamp") => Wrap::Clamp,
         Some("mirror") => Wrap::Mirror,
-        Some("constant") => Wrap::Black,
+        Some("constant" | "black") => Wrap::Black,
         _ => Wrap::Repeat,
     };
-    let (placed, uv) = match driver(network, at, "texcoord") {
+    let usd = usd(network, at);
+    let (coordinates, wraps) = match usd {
+        true => ("st", ["wrapS", "wrapT"]),
+        false => ("texcoord", ["uaddressmode", "vaddressmode"]),
+    };
+    let (placed, uv) = match driver(network, at, coordinates) {
         Some(from) => affine(network, from)?,
         None => (IDENTITY, Arc::from(names::UV)),
     };
     let transform = match node_kind {
-        "image" => placed,
+        "image" | "UsdUVTexture" => placed,
         kind => then(
             placed,
             gltf_placement(network, at, kind.ends_with("colorimage")),
@@ -116,7 +129,7 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
     };
     let factor = match (
         node_kind.ends_with("colorimage"),
-        node.values().get("factor"),
+        node.values().get(if usd { "scale" } else { "factor" }),
     ) {
         (true, _) => four(node.values().get("color")),
         (false, Some(Value::Number(f))) => [*f as f32, *f as f32, *f as f32, 1.0],
@@ -128,7 +141,7 @@ pub fn sampled(network: &MaterialNetwork, at: u32) -> Option<Sampled> {
         image: node.textures().get("file").map(|id| id.prim()),
         uv,
         transform: transform.map(|row| row.map(|v| v as f32)),
-        wrap: [wrap("uaddressmode"), wrap("vaddressmode")],
+        wrap: wraps.map(wrap),
         nearest: choice("filtertype") == Some("closest"),
         factor,
         tint: vertex.then(|| Arc::from(names::CD)),
@@ -213,9 +226,10 @@ fn gltf_placement(network: &MaterialNetwork, at: u32, color: bool) -> Affine {
 }
 
 /// Node `at`'s coordinates as an affine map of a coordinate set's, and that
-/// set's primvar: a `texcoord` (`uv`, `uv2`…), a `geompropvalue`, or a
-/// `place2d` of either or of its own coordinates (its `texcoord` value,
-/// (0, 0) by default, when nothing drives it: a map of no set's).
+/// set's primvar: a `texcoord` (`uv`, `uv2`…), a `geompropvalue` or USD
+/// Primvar Reader, or a `place2d` of either or of its own coordinates (its
+/// `texcoord` value, (0, 0) by default, when nothing drives it: a map of no
+/// set's).
 fn affine(network: &MaterialNetwork, at: u32) -> Option<(Affine, Arc<str>)> {
     match kind(network, at) {
         "texcoord" => {
@@ -225,13 +239,7 @@ fn affine(network: &MaterialNetwork, at: u32) -> Option<(Affine, Arc<str>)> {
             };
             Some((IDENTITY, Arc::from(set)))
         }
-        "geompropvalue" => {
-            let name = network.nodes()[at as usize]
-                .values()
-                .get("geomprop")?
-                .text()?;
-            Some((IDENTITY, Arc::from(name)))
-        }
+        "geompropvalue" | "UsdPrimvarReader" => Some((IDENTITY, crate::nodes::named(network, at)?)),
         "place2d" => {
             let (inner, set) = match driver(network, at, "texcoord") {
                 Some(from) => affine(network, from)?,

@@ -50,6 +50,7 @@ kinogaki-pixel/lib test nodes::tests::surface_unlit_cutout_cuts_its_texture_out_
 kinogaki-pixel/lib test nodes::tests::surface_unlit_is_an_unlit_surface_of_its_emission
 kinogaki-pixel/lib test nodes::tests::the_standard_form_becomes_a_surface_of_its_base_color
 kinogaki-pixel/lib test nodes::tests::the_standard_form_of_light_alone_is_unlit_and_an_attribute_drives_the_color
+kinogaki-pixel/lib test nodes::tests::usd_primvar_readers_reach_pixel_as_coordinates_and_a_tint
 kinogaki-pixel/lib test outputs::tests::each_output_is_described_by_its_id
 kinogaki-pixel/lib test pictures::tests::a_large_image_is_reduced_as_it_is_read
 kinogaki-pixel/lib test pictures::tests::a_picture_holds_the_images_texels_straight

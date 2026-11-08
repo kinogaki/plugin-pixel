@@ -30,7 +30,13 @@ pub fn description() -> EngineDescription {
         standard_nodes: [
             &["surface_unlit", "kinogaki_surface_unlit", "surfacematerial"][..],
             &crate::sampled::NODES,
-            &["texcoord", "place2d", "geomcolor", "geompropvalue"],
+            &[
+                "texcoord",
+                "place2d",
+                "geomcolor",
+                "geompropvalue",
+                "UsdPrimvarReader",
+            ],
         ]
         .concat()
         .into_iter()

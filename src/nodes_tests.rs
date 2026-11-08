@@ -320,3 +320,56 @@ fn a_textured_surface_is_an_openpbr_surface_of_its_texture() {
     assert_eq!(from.def().mtlx().unwrap().node, "image");
     assert_eq!(from.images()["file"].name(), "/t/brick.png");
 }
+
+/// A USD Preview Surface's texture read through a USD Primvar Reader, and
+/// its color read off `Cd` by one: Pixel samples the texture at the primvar
+/// the reader names, times its scale, and tints by `Cd`, its fallback where
+/// a mesh lacks it.
+#[test]
+fn usd_primvar_readers_reach_pixel_as_coordinates_and_a_tint() {
+    use kinogaki_render_api::Engines;
+    use kinogaki_render_api::geometry::image::ImageSource;
+    let pixel = crate::description::description();
+    let engines = Engines::new(vec![pixel.clone()]);
+    let preview = || mtlx::def("ND_UsdPreviewSurface_surfaceshader").unwrap();
+    let mut built = MaterialNetwork::builder();
+    let s = built.node(&preview(), &Parameters::new()).unwrap();
+    let scaled = values(&[
+        ("scale", Value::Numbers(vec![0.5, 0.25, 1.0, 1.0])),
+        ("wrapS", Value::Choice(Arc::from("clamp"))),
+    ]);
+    let t = (built.node(&mtlx::def("ND_UsdUVTexture_23").unwrap(), &scaled)).unwrap();
+    built
+        .image(t, "file", ImageSource::path("/t/leaf.png"))
+        .unwrap();
+    let st = values(&[("varname", Value::Text("uv2".into()))]);
+    let r = (built.node(&mtlx::def("ND_UsdPrimvarReader_vector2").unwrap(), &st)).unwrap();
+    built.link(r, "out", t, "st").unwrap();
+    built.link(t, "rgb", s, "diffuseColor").unwrap();
+    let leaf = built.build(s).unwrap();
+    let Material::Surface(s, look) = material(&engines.adopt(&leaf, pixel.id())) else {
+        panic!("a surface");
+    };
+    let texture = look.texture.expect("its texture");
+    assert_eq!((s.color, &*texture.uv), ([1.0; 3], "uv2"));
+    assert_eq!(texture.factor, [0.5, 0.25, 1.0, 1.0]);
+    assert_eq!(texture.wrap, [Wrap::Clamp, Wrap::Repeat]);
+    let mut built = MaterialNetwork::builder();
+    let s = built.node(&preview(), &Parameters::new()).unwrap();
+    let cd = values(&[
+        ("varname", Value::Text("Cd".into())),
+        ("fallback", Value::Numbers(vec![0.6, 0.5, 0.4])),
+    ]);
+    let r = (built.node(&mtlx::def("ND_UsdPrimvarReader_vector3").unwrap(), &cd)).unwrap();
+    built.link(r, "out", s, "diffuseColor").unwrap();
+    let tinted = engines.adopt(&built.build(s).unwrap(), pixel.id());
+    let Material::Surface(s, look) = material(&tinted) else {
+        panic!("a surface");
+    };
+    assert_eq!((s.color, look.attribute.as_deref()), ([1.0; 3], Some("Cd")));
+    assert_eq!(look.fallback, Some([0.6, 0.5, 0.4]));
+    assert_eq!(
+        tinted.named_attributes().into_iter().collect::<Vec<_>>(),
+        [Arc::from("Cd")]
+    );
+}
