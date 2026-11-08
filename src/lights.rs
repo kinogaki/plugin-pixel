@@ -34,7 +34,7 @@ const GOBO: &str = "gobo";
 /// pattern's values.
 fn gobo_section() -> Schema {
     let on = || Condition::when("gobo", true);
-    let shown = |d: Parameter| d.requires(on(), "Used with Gobo on");
+    let shown = |d: Parameter| d.requires(on());
     let section = Section::new(GOBO, "Gobo", false).open_when(on());
     [
         Parameter::toggle("gobo", "Gobo", false)
