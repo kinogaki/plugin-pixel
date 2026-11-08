@@ -53,6 +53,8 @@ fn the_light_falls_on_the_shade_levels() {
     let sky = Light {
         shape: LightShape::Dome {
             image: None,
+            format: kinogaki_render_api::standard::DomeFormat::Automatic,
+            pole: kinogaki_render_api::standard::Pole::Scene,
             ground: None,
         },
         ..Light::default()

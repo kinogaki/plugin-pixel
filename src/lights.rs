@@ -1,10 +1,10 @@
 //! Pixel's lights and fog: the prim types it declares and its object kinds
 //! of them, and what each prim lights a frame with.
 //!
-//! - **Lights** (`kinogaki.pixel.light`, placed): UsdLux's standard area
-//!   and dome lights; its distant and spot lights, the standard ones with a
-//!   **Gobo** section (a mask of dappled light, as if through leaves out of
-//!   frame); and the **Rim Light** (`kinogaki.pixel.rim_light`), a
+//! - **Lights** (`kinogaki.pixel.light`, placed): UsdLux's standard rect,
+//!   disk and dome lights; its distant and sphere lights, the standard ones
+//!   with a **Gobo** section (a mask of dappled light, as if through leaves
+//!   out of frame); and the **Rim Light** (`kinogaki.pixel.rim_light`), a
 //!   Fresnel-like edge, (1 − n·v)⁴ × its emission, added where direct light
 //!   reaches a surface (Lit) or all round (All), with no place or direction.
 //! - **Fog** (`kinogaki.pixel.fog`, at the root): the standard exponential
@@ -92,12 +92,13 @@ fn rim_light() -> PrimType {
     PrimType::new(RIM_LIGHT, "Rim Light", Role::Light, schema)
 }
 
-/// Pixel's light types, in the order menus list them: the standard ones (a
-/// Gobo on distant lights and spots), then the rim light.
+/// Pixel's light types, in the order menus list them: the standard ones but
+/// the cylinder (a Gobo on distant and sphere lights), then the rim light.
 pub fn light_types() -> Vec<PrimType> {
     (standard::lights().into_iter())
+        .filter(|ty| ty.id != standard::CYLINDER_LIGHT)
         .map(|ty| match ty.id {
-            standard::DISTANT_LIGHT | standard::SPOT_LIGHT => ty.merged(gobo_section()),
+            standard::DISTANT_LIGHT | standard::SPHERE_LIGHT => ty.merged(gobo_section()),
             _ => ty,
         })
         .chain([rim_light()])
@@ -160,29 +161,30 @@ mod tests {
     }
 
     #[test]
-    fn distant_lights_and_spots_take_a_gobo_and_the_rim_comes_last() {
+    fn distant_and_sphere_lights_take_a_gobo_and_the_rim_comes_last() {
         let types = light_types();
         let ids: Vec<PrimTypeId> = types.iter().map(|t| t.id).collect();
         assert_eq!(
             ids,
             [
-                standard::AREA_LIGHT,
-                standard::DOME_LIGHT,
+                standard::RECT_LIGHT,
+                standard::DISK_LIGHT,
+                standard::SPHERE_LIGHT,
                 standard::DISTANT_LIGHT,
-                standard::SPOT_LIGHT,
+                standard::DOME_LIGHT,
                 RIM_LIGHT
             ]
         );
         let gobo_of = |t: &PrimType| t.schema().parameters().any(|d| &*d.name == "goboScale");
         assert_eq!(
             types.iter().map(gobo_of).collect::<Vec<_>>(),
-            [false, false, true, true, false]
+            [false, false, true, true, false, false]
         );
         // Off by default, decoded when on.
-        let spot = declared(&types[3], &[]);
+        let spot = declared(&types[2], &[]);
         assert_eq!(gobo(&spot), None);
         let on = declared(
-            &types[3],
+            &types[2],
             &[
                 ("gobo", Value::Bool(true)),
                 ("goboSeed", Value::Integer(9)),

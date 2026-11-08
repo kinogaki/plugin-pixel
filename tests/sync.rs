@@ -393,9 +393,12 @@ fn lights_domes_rims_and_fog_light_the_scene() {
     let dome = Light {
         shape: LightShape::Dome {
             image: None,
+            format: kinogaki_render_api::standard::DomeFormat::Automatic,
+            pole: kinogaki_render_api::standard::Pole::Scene,
             ground: Some([0.1, 0.2, 0.3]),
         },
         intensity: 2.0,
+        camera: true,
         ..Light::default()
     }
     .declared();
@@ -407,9 +410,7 @@ fn lights_domes_rims_and_fog_light_the_scene() {
     rim.values.insert("side".into(), standard::choice("all"));
     let mut fog = Declared::new(standard::FOG, standard::fog().schema().values());
     fog.values.insert("inscatter".into(), Value::Bool(true));
-    let mut hidden = sun.clone();
-    hidden.visibility.visible = false;
-    let prims = [sun, dome, rim, fog, hidden].map(Prim::Declared);
+    let prims = [sun, dome, rim, fog].map(Prim::Declared);
     let changed = sync.apply(added(
         prims
             .into_iter()
@@ -419,12 +420,13 @@ fn lights_domes_rims_and_fog_light_the_scene() {
     ));
     assert!(changed.lights && !changed.meshes && !changed.instances);
     let scene = sync.scene();
-    assert_eq!(scene.lights.len(), 1, "the sun; the hidden one is out");
+    assert_eq!(scene.lights.len(), 1, "the sun");
     assert_eq!(scene.lights[0].radiance, [3.0; 3]);
     assert_eq!(
         (scene.ambient.sky, scene.ambient.ground),
         ([2.0; 3], [0.2, 0.4, 0.6])
     );
+    // The dome shows behind the scene: its Visible to Camera is on.
     assert!(scene.ambient.seen);
     assert_eq!(
         (scene.rims.all, scene.rims.lit),

@@ -165,6 +165,8 @@ pub fn scene() -> SceneUpdate {
     let sky = Light {
         shape: LightShape::Dome {
             image: None,
+            format: kinogaki_render_api::standard::DomeFormat::Automatic,
+            pole: kinogaki_render_api::standard::Pole::Scene,
             ground: Some([0.1, 0.09, 0.07]),
         },
         color: [0.32, 0.38, 0.52],

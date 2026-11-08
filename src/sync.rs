@@ -527,9 +527,6 @@ impl Sync {
             let Prim::Declared(prim) = prim else {
                 continue;
             };
-            if !prim.visibility.visible {
-                continue;
-            }
             if let Some(standard) = standard::Fog::decode(prim) {
                 fog = fog.or_else(|| Some(fog_of(standard)));
                 continue;
@@ -555,25 +552,29 @@ impl Sync {
                         &mut ambient.ground,
                         ground.map_or(radiance, |g| g.map(|c| c * scale)),
                     );
-                    ambient.seen |= prim.visibility.camera;
+                    ambient.seen |= light.camera;
                     continue;
                 }
-                LightKind::Rect { width, height } => LightShape::Area {
+                LightKind::Rect { width, height, .. } => LightShape::Area {
                     area: width * height,
                 },
                 LightKind::Disk { radius } => LightShape::Area {
                     area: std::f32::consts::PI * radius * radius,
                 },
                 LightKind::Distant { angle } => LightShape::Distant { angle },
-                LightKind::Spot {
-                    radius,
-                    cone_angle,
-                    cone_softness,
-                } => LightShape::Spot {
-                    radius,
-                    cone_angle,
-                    cone_softness,
-                },
+                // A sphere is a spot of its shaping's cone (180° unshaped).
+                LightKind::Sphere { radius, .. } => {
+                    let shaping = light.shaping.clone().unwrap_or(standard::Shaping {
+                        cone_angle: 180.0,
+                        ..standard::Shaping::default()
+                    });
+                    LightShape::Spot {
+                        radius,
+                        cone_angle: shaping.cone_angle,
+                        cone_softness: shaping.cone_softness,
+                    }
+                }
+                LightKind::Cylinder { .. } => continue,
             };
             lights.push(Light {
                 shape,
