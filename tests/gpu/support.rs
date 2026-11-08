@@ -212,7 +212,6 @@ pub fn view(width: u32, height: u32, eye: Vec3, values: &[(&str, Value)]) -> Vie
 }
 
 /// Pixel (`x`, `y`) of a frame's half floats, as floats.
-pub fn at(frame: &kinogaki_render_api::Frame, x: u32, y: u32) -> [f32; 4] {
-    let i = ((y * frame.width + x) * 4) as usize;
-    std::array::from_fn(|k| kinogaki_render_api::geometry::image::half_to_f32(frame.pixels[i + k]))
+pub fn at(frame: &kinogaki_render_api::ViewPass, x: u32, y: u32) -> [f32; 4] {
+    frame.image.read_pixel(0, x as i32, y as i32)
 }

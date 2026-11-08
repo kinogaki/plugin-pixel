@@ -5,7 +5,9 @@
 //! gives, and nothing where a cutout cuts its alpha.
 use super::support::{LIMIT, at, look, pixel, unlit_cutout};
 use kinogaki_pixel::sampled::sampled;
-use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample};
+use kinogaki_render_api::geometry::image::{
+    Decoding, Encoding, Format, Image, Rect, Sample, TextureImage,
+};
 use kinogaki_render_api::geometry::{Attribute, Column, Domain, Meaning, Sampled, Vec3, names};
 use kinogaki_render_api::value::Value;
 use kinogaki_render_api::{
@@ -59,19 +61,23 @@ fn square(lo: f32, hi: f32) -> Shape {
 }
 
 /// The picture as the host sends it: premultiplied.
-fn picture() -> Image {
+fn picture() -> TextureImage {
     let format = Format::rgba(Sample::F32, Encoding::color("ACEScg", true));
     let texels: Vec<f32> = TEXELS.iter().flat_map(|t| t.map(|c| c * t[3])).collect();
-    Image::builder(Rect::new([0, 0], [2, 2]).unwrap())
-        .plane(format, bytemuck::cast_slice(&texels))
+    let image = Image::builder(Rect::new([0, 0], [2, 2]).unwrap())
+        .plane(format, &texels)
         .build()
-        .unwrap()
+        .unwrap();
+    TextureImage {
+        image,
+        decoding: Some(Decoding::IDENTITY),
+    }
 }
 
 /// The frame of `network` on a square with coordinates `lo` to `hi`, seen
 /// straight on through a 4-unit-wide orthographic view: each film pixel 1/16
 /// of a unit, the square from pixel 16 to 48.
-fn rendered(network: MaterialNetwork, (lo, hi): (f32, f32)) -> Arc<kinogaki_render_api::Frame> {
+fn rendered(network: MaterialNetwork, (lo, hi): (f32, f32)) -> Arc<kinogaki_render_api::ViewPass> {
     let (mut engine, _display, waiter, _device) = pixel();
     let material = Material {
         network: Arc::new(network),

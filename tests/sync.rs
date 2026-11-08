@@ -520,14 +520,17 @@ fn encoded(
     right: [f32; 4],
     encoding: kinogaki_render_api::geometry::image::Encoding,
 ) -> Prim {
-    use kinogaki_render_api::geometry::image::{Format, Image, Rect, Sample};
-    let format = Format::rgba(Sample::F32, encoding);
+    use kinogaki_render_api::geometry::image::{
+        Decoding, Encoding, Format, Image, Rect, Sample, TextureImage,
+    };
+    let format = Format::rgba(Sample::F32, encoding.clone());
     let texels = [left, right].concat();
+    let decoding = (encoding != Encoding::Raw).then_some(Decoding::IDENTITY);
     let image = Image::builder(Rect::new([0, 0], [2, 1]).unwrap())
-        .plane(format, bytemuck::cast_slice(&texels))
+        .plane(format, &texels)
         .build()
         .unwrap();
-    Prim::Texture(image)
+    Prim::Texture(TextureImage { image, decoding })
 }
 
 #[test]

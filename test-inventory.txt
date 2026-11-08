@@ -53,6 +53,7 @@ kinogaki-pixel/lib test nodes::tests::the_standard_form_of_light_alone_is_unlit_
 kinogaki-pixel/lib test outputs::tests::each_output_is_described_by_its_id
 kinogaki-pixel/lib test pictures::tests::a_large_image_is_reduced_as_it_is_read
 kinogaki-pixel/lib test pictures::tests::a_picture_holds_the_images_texels_straight
+kinogaki-pixel/lib test pictures::tests::a_pictures_texels_are_decoded_before_they_are_averaged
 kinogaki-pixel/lib test presets::tests::each_preset_makes_a_material_of_a_pixel_node
 kinogaki-pixel/lib test render::bvh::tests::coincident_triangles_still_split
 kinogaki-pixel/lib test render::bvh::tests::empty_scene_hits_nothing

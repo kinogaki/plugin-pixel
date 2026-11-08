@@ -6,7 +6,9 @@
 //! opaque half the card stops them all.
 use super::support::{LIMIT, id, pixel, surface, unlit_cutout};
 use kinogaki_render_api::aov::standard as aovs;
-use kinogaki_render_api::geometry::image::{Encoding, Format, Image, Rect, Sample};
+use kinogaki_render_api::geometry::image::{
+    Decoding, Encoding, Format, Image, Rect, Sample, TextureImage,
+};
 use kinogaki_render_api::geometry::{
     Attribute, Column, Domain, Meaning, Sampled, Vec3, Xform, names,
 };
@@ -58,13 +60,17 @@ fn square(h: f32, y: f32, material: u32, uv: bool) -> Shape {
 }
 
 /// Two white texels, straight: the first (u < 0.5) transparent.
-fn picture() -> Image {
+fn picture() -> TextureImage {
     let format = Format::rgba(Sample::F32, Encoding::color("ACEScg", false));
     let texels = [1.0f32, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0];
-    Image::builder(Rect::new([0, 0], [2, 1]).unwrap())
-        .plane(format, bytemuck::cast_slice(&texels))
+    let image = Image::builder(Rect::new([0, 0], [2, 1]).unwrap())
+        .plane(format, &texels)
         .build()
-        .unwrap()
+        .unwrap();
+    TextureImage {
+        image,
+        decoding: Some(Decoding::IDENTITY),
+    }
 }
 
 /// What the floor shows at each of `pixels`, from each of `outputs`, under

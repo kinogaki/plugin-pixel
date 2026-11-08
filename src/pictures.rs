@@ -1,9 +1,11 @@
-//! Texture prims as the pictures surfaces sample ([`picture`]): made a row
-//! at a time on the process's workers (the SDK's one budget) straight from
-//! the image's tiles, a large image reduced as it is read, never held whole
-//! at its own size.
+//! Texture prims as the pictures surfaces sample ([`picture`]): Pixel's own
+//! form of a texture, straight RGBA floats of linear ACEScg, made a row at a
+//! time on the process's workers (the SDK's one budget) straight from the
+//! image's tiles in the file's own samples, each texel read as the SDK
+//! defines a texture's texel (spread, decoded, straight) before a large
+//! image is reduced as it is read, never held whole at its own size.
 use crate::render::Picture;
-use kinogaki_render_api::geometry::image::{Format, Image, TILE};
+use kinogaki_render_api::geometry::image::TextureImage;
 use kinogaki_render_api::geometry::parallel;
 
 /// The longest side, in texels, of a picture a surface samples: a larger
@@ -11,12 +13,14 @@ use kinogaki_render_api::geometry::parallel;
 /// are coarse).
 pub const MAX_PICTURE: u32 = 2048;
 
-/// `image`'s main layer as a picture: its texels over the data window (the
-/// display window, as the host sends textures), rows from the top, made
-/// straight where its encoding says the host premultiplied them (colors;
-/// data comes straight), a grey one grey in every channel; each the mean of
-/// the texels it covers when the image is reduced.
-pub fn picture(image: &Image) -> Picture {
+/// `texture`'s first layer as a picture: its texels over the data window
+/// (the display window, as the host sends textures), rows from the top, a
+/// color one's decoded into linear ACEScg and made straight where its
+/// encoding says it is premultiplied (data as stored), a grey one grey in
+/// every channel; each the mean of the texels it covers when the image is
+/// reduced.
+pub fn picture(texture: &TextureImage) -> Picture {
+    let image = &texture.image;
     let [width, height] = image.data().size();
     let mut by = 1;
     while width.max(height).div_ceil(by) > MAX_PICTURE {
@@ -24,41 +28,30 @@ pub fn picture(image: &Image) -> Picture {
     }
     let size = [width.div_ceil(by), height.div_ceil(by)];
     let mut texels = vec![[0.0f32; 4]; size[0] as usize * size[1] as usize];
-    if let Some(format) = image.layers().first().map(|l| l.format()) {
-        let mut rows: Vec<&mut [[f32; 4]]> = texels.chunks_mut(size[0] as usize).collect();
-        let made = parallel::chunks_mut(&mut rows, 1, |first, rows| {
-            for (k, row) in rows.iter_mut().enumerate() {
-                row_of(image, format, by, (first + k) as u32, row);
-            }
-            Ok::<(), std::convert::Infallible>(())
-        });
-        let Ok(()) = made;
-    }
+    let mut rows: Vec<&mut [[f32; 4]]> = texels.chunks_mut(size[0] as usize).collect();
+    let made = parallel::chunks_mut(&mut rows, 1, |first, rows| {
+        for (k, row) in rows.iter_mut().enumerate() {
+            row_of(texture, by, (first + k) as u32, row);
+        }
+        Ok::<(), std::convert::Infallible>(())
+    });
+    let Ok(()) = made;
     Picture::new(size, texels)
 }
 
-/// Picture row `y` of `image` (its first layer of `format`) reduced by `by`
-/// into `row`: each texel the mean of the `by` × `by` image texels it covers
-/// (fewer at the edges), a tile holding nothing zeros.
-fn row_of(image: &Image, format: &Format, by: u32, y: u32, row: &mut [[f32; 4]]) {
-    let [width, height] = image.data().size();
-    let (side, pixel) = (TILE as usize, format.pixel_bytes());
+/// Picture row `y` of `texture` reduced by `by` into `row`: each texel the
+/// mean of the `by` × `by` texels it covers (fewer at the edges), each as
+/// the texture's reader takes it ([`TextureImage::texel`]).
+fn row_of(texture: &TextureImage, by: u32, y: u32, row: &mut [[f32; 4]]) {
+    let data = texture.image.data();
+    let ([width, height], [min_x, min_y]) = (data.size(), data.min());
     let mut counts = vec![0u32; row.len()];
     for sy in y * by..((y + 1) * by).min(height) {
-        let within = (sy % TILE) as usize * side;
-        for tx in 0..width.div_ceil(TILE) {
-            let tile = image.tile(0, [tx, sy / TILE]);
-            let across = side.min((width - tx * TILE) as usize);
-            for x in 0..across {
-                let sx = tx as usize * side + x;
-                let texel = match tile {
-                    Some(tile) => texel(format, &tile.bytes()[(within + x) * pixel..]),
-                    None => [0.0; 4],
-                };
-                let into = &mut row[sx / by as usize];
-                *into = std::array::from_fn(|k| into[k] + texel[k]);
-                counts[sx / by as usize] += 1;
-            }
+        for sx in 0..width {
+            let texel = texture.texel(min_x + sx as i32, min_y + sy as i32);
+            let into = &mut row[(sx / by) as usize];
+            *into = std::array::from_fn(|k| into[k] + texel[k]);
+            counts[(sx / by) as usize] += 1;
         }
     }
     for (texel, count) in row.iter_mut().zip(counts) {
@@ -66,44 +59,19 @@ fn row_of(image: &Image, format: &Format, by: u32, y: u32, row: &mut [[f32; 4]])
     }
 }
 
-/// The pixel at the start of `bytes` (of `format`) as a straight RGBA
-/// texel: one channel grey, two grey and alpha, three opaque.
-fn texel(format: &Format, bytes: &[u8]) -> [f32; 4] {
-    let size = format.sample.bytes();
-    let c = |k: usize| format.sample.read(&bytes[k * size..]);
-    let rgba = match format.channels.len() {
-        1 => [c(0), c(0), c(0), 1.0],
-        2 => [c(0), c(0), c(0), c(1)],
-        3 => [c(0), c(1), c(2), 1.0],
-        _ => [c(0), c(1), c(2), c(3)],
-    };
-    match format.encoding.premultiplied() {
-        true => straight(rgba),
-        false => rgba,
-    }
-}
-
-/// `rgba` unpremultiplied where its alpha is between 0 and 1.
-fn straight([r, g, b, a]: [f32; 4]) -> [f32; 4] {
-    match a > 0.0 && a < 1.0 {
-        true => [r / a, g / a, b / a, a],
-        false => [r, g, b, a],
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kinogaki_render_api::geometry::image::{Encoding, Rect, Sample};
+    use kinogaki_render_api::geometry::image::{Decoding, Encoding, Format, Image, Rect, Sample};
 
-    /// A `width` × `height` image of `format` whose pixel (x, y) holds
-    /// `pixel(x, y)`.
+    /// A `width` × `height` texture of `format` whose pixel (x, y) holds
+    /// `pixel(x, y)`, its colors linear ACEScg already.
     fn image(
         width: u32,
         height: u32,
         format: Format,
         pixel: impl Fn(u32, u32) -> Vec<f32>,
-    ) -> Image {
+    ) -> TextureImage {
         let mut bytes = Vec::new();
         for y in 0..height {
             for x in 0..width {
@@ -115,10 +83,12 @@ mod tests {
             }
         }
         let window = Rect::new([0, 0], [width as i32, height as i32]).unwrap();
-        Image::builder(window)
-            .plane(format, &bytes)
-            .build()
-            .unwrap()
+        let decoding = (format.encoding != Encoding::Raw).then_some(Decoding::IDENTITY);
+        let image = Image::builder(window).plane(format, &bytes).build();
+        TextureImage {
+            image: image.unwrap(),
+            decoding,
+        }
     }
 
     /// Past a tile's side, so the tiles in a row and rows of tiles land
@@ -156,5 +126,39 @@ mod tests {
         assert_eq!(made.texels[0], [1.5, 1.5, 1.0, 1.0]);
         // The last covers the image's last two columns alone.
         assert_eq!(made.texels[MAX_PICTURE as usize - 1], [0.5, 1.5, 1.0, 1.0]);
+    }
+
+    /// An 8-bit sRGB texture's picture holds its texels decoded (sRGB's
+    /// transfer function, then its matrix) before a reduction averages them,
+    /// as the decoding gives them on its own.
+    #[test]
+    fn a_pictures_texels_are_decoded_before_they_are_averaged() {
+        use kinogaki_render_api::geometry::image::Transfer;
+        let decoding = Decoding {
+            transfer: Transfer::SRGB,
+            matrix: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 0.5]],
+        };
+        let rgb = Format {
+            channels: Format::rgba(Sample::U8, Encoding::Raw).channels[..3].into(),
+            ..Format::rgba(Sample::U8, Encoding::color("sRGB", false))
+        };
+        let mut texture = image(2, 1, rgb.clone(), |x, _| match x {
+            0 => vec![1.0, 0.0, 0.0],
+            _ => vec![0.0, 0.0, 1.0],
+        });
+        texture.decoding = Some(decoding);
+        let made = picture(&texture);
+        assert_eq!(made.texels[0], [0.0, 1.0, 0.0, 1.0]);
+        assert_eq!(made.texels[1], [0.0, 0.0, 0.5, 1.0]);
+        // Reduced: the mean of light, not of codes (half a code of grey
+        // would be 0.214).
+        let width = MAX_PICTURE * 2;
+        let mut stripes = image(width, 1, rgb, |x, _| vec![(x % 2) as f32; 3]);
+        stripes.decoding = Some(Decoding {
+            transfer: Transfer::SRGB,
+            ..Decoding::IDENTITY
+        });
+        let mean = picture(&stripes).texels[0];
+        assert!((mean[0] - 0.5).abs() < 1e-6, "{mean:?}");
     }
 }

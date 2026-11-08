@@ -28,10 +28,8 @@ fn a_change_renders_one_frame_and_rest_renders_none() {
     engine.view(ViewId(1), view(64, 48, eye(), &[]));
     waiter.until(LIMIT, || engine.latest(ViewId(1)).is_some());
     let frame = engine.latest(ViewId(1)).unwrap();
-    assert_eq!(
-        (frame.width, frame.height, frame.pixels.len()),
-        (64, 48, 64 * 48 * 4)
-    );
+    assert_eq!(frame.size(), [64, 48]);
+    assert!(frame.image.plane(0).is_some(), "its pixels, as asked");
     assert_eq!(waiter.count(), 1, "one wake for the frame");
     // The box is red where it is, the floor grey, the sky the sky's.
     let middle = at(&frame, 32, 26);
@@ -266,7 +264,11 @@ fn a_zero_normal_shades_as_its_triangles_own() {
         (engine.latest(ViewId(1))).is_some_and(|f| f.generation > flat.generation)
     });
     let zeroed = engine.latest(ViewId(1)).unwrap();
-    assert!(zeroed.pixels == flat.pixels, "{:?}", at(&zeroed, 32, 26));
+    assert!(
+        zeroed.image.plane(0) == flat.image.plane(0),
+        "{:?}",
+        at(&zeroed, 32, 26)
+    );
 }
 
 #[test]
@@ -328,12 +330,12 @@ fn a_preview_is_a_swatch_of_the_material() {
         side: 64,
     };
     let picture = waiter.take(&engine.preview(request(red.network.clone())), LIMIT);
-    assert_eq!((picture.side, picture.pixels.len()), (64, 64 * 64 * 4));
-    let middle = &picture.pixels[(32 * 64 + 32) * 4..][..4];
+    assert_eq!(picture.data().size(), [64, 64]);
+    let middle = picture.read_pixel(0, 32, 32);
     assert!(middle[0] > middle[1] * 2.0, "red: {middle:?}");
     // A second request replaces the first one's scene.
     let picture = waiter.take(&engine.preview(request(Arc::default())), LIMIT);
-    let middle = &picture.pixels[(32 * 64 + 32) * 4..][..4];
+    let middle = picture.read_pixel(0, 32, 32);
     assert!(
         middle[1] > middle[0] * 0.6,
         "the default, a grey under warm light: {middle:?}"

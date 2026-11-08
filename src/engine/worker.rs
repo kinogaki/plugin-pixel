@@ -13,7 +13,9 @@ use crate::sync::Sync;
 use kinogaki_render_api::display::wgpu;
 use kinogaki_render_api::geometry::{Diagnostic, Error};
 use kinogaki_render_api::thread::{Mailbox, PREVIEW, Published, Reading};
-use kinogaki_render_api::{Frame, RenderStats, SceneUpdate, ViewDesc, ViewId, Wake};
+use kinogaki_render_api::{
+    EngineImage, RenderStats, SceneUpdate, ViewDesc, ViewId, ViewPass, Wake,
+};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
 use std::sync::{Arc, Mutex};
@@ -354,18 +356,21 @@ impl Worker {
             return;
         }
         view.failed = None;
-        let pixels: Arc<[u16]> = match self.read_pixels {
-            true => readback::halves(&device, self.renderer.queue(), &image.shown.texture).into(),
-            false => Arc::from([]),
+        let image = match self.read_pixels {
+            true => ViewPass::pixels(
+                size,
+                &readback::halves(&device, self.renderer.queue(), &image.shown.texture),
+            ),
+            false => EngineImage(image_key(set, at)).image(size),
         };
-        let frame = Arc::new(Frame {
+        let Ok(image) = image else {
+            return;
+        };
+        let frame = Arc::new(ViewPass {
             view: id,
             generation: view.generation,
             desc: view.desc.clone(),
-            width: size[0],
-            height: size[1],
-            pixels,
-            image: image_key(set, at),
+            image,
             stats: RenderStats {
                 samples: 1,
                 target: 1,

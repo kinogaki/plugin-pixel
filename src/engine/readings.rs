@@ -3,10 +3,11 @@
 //! each film pixel a pixel-size block, as the display images show it.
 use crate::gpu::{Renderer, Targets, readback};
 use crate::outputs::Output;
+use kinogaki_render_api::aov::Values;
 use kinogaki_render_api::geometry::Error;
 use kinogaki_render_api::thread::Reading;
 use kinogaki_render_api::value::{Parameters, Value};
-use kinogaki_render_api::{PreviewScene, ViewCamera, ViewDesc, ViewMode, aov};
+use kinogaki_render_api::{AovClass, PreviewScene, ViewCamera, ViewDesc, ViewMode, aov};
 use std::sync::Arc;
 
 /// Film pixels across a swatch.
@@ -67,7 +68,11 @@ pub fn answer(
             let channels = d.aov.channels();
             let film = readback::floats(renderer.device(), renderer.queue(), texture, channels);
             let plane = upscaled(&film, channels, targets.film.size, view, pixel_size);
-            Some((d, plane))
+            let values = match d.aov.class {
+                AovClass::Id => Values::Whole(plane.iter().map(|v| v.to_bits()).collect()),
+                _ => Values::Floats(plane),
+            };
+            Some((d, values))
         })
         .collect::<Vec<_>>();
     match aov::image(view, &planes, &[]) {

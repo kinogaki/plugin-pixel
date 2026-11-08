@@ -466,8 +466,8 @@ impl MaterialRules for Rules {
                             Wrap::Black => image::Wrap::Black,
                         }),
                         filter: match t.nearest {
-                            true => image::Filter::Nearest,
-                            false => image::Filter::Smooth,
+                            true => image::SampleFilter::Nearest,
+                            false => image::SampleFilter::Bilinear,
                         },
                     };
                     Some(shown)

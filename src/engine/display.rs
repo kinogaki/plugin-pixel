@@ -15,7 +15,7 @@ use crate::render::film::Film;
 use kinogaki_render_api::display::{self, Display, Shown};
 use kinogaki_render_api::geometry::image::{self, metadata};
 use kinogaki_render_api::geometry::{Attribute, Domain, Meaning};
-use kinogaki_render_api::{Aov, Frame, ViewId};
+use kinogaki_render_api::{Aov, ViewId, ViewPass};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
@@ -35,7 +35,7 @@ pub struct Ring {
     /// The images.
     pub images: Vec<Arc<Image>>,
     /// The frame each holds (none while it is written).
-    pub holds: Vec<Option<Arc<Frame>>>,
+    pub holds: Vec<Option<Arc<ViewPass>>>,
     /// Pins on each.
     pub pins: Arc<[AtomicU32]>,
 }
@@ -55,7 +55,7 @@ impl Ring {
     }
 
     /// An image the render thread may write: unpinned, not holding `newest`.
-    pub fn free(&self, newest: Option<&Arc<Frame>>) -> Option<usize> {
+    pub fn free(&self, newest: Option<&Arc<ViewPass>>) -> Option<usize> {
         (0..self.images.len()).find(|&at| {
             let pinned = self.pins[at].load(Ordering::Acquire) > 0;
             let newest =
@@ -123,15 +123,14 @@ fn pixelated(film: image::Image) -> Option<image::Image> {
 }
 
 /// The ring and index of the image holding `frame`, while it does.
-fn holding<'a>(shared: &'a Shared, frame: &Arc<Frame>) -> Option<(&'a Ring, usize)> {
+fn holding<'a>(shared: &'a Shared, frame: &Arc<ViewPass>) -> Option<(&'a Ring, usize)> {
     let ring = shared.rings.get(&frame.view)?;
-    let at = (frame.image & 7) as usize;
-    let held = ring.holds.get(at)?.as_ref()?;
-    (frame.image >> 3 == ring.set && Arc::ptr_eq(held, frame)).then_some((ring, at))
+    let held = |h: &Option<Arc<ViewPass>>| h.as_ref().is_some_and(|h| Arc::ptr_eq(h, frame));
+    Some((ring, ring.holds.iter().position(held)?))
 }
 
 impl Display for PixelDisplay {
-    fn acquire(&mut self, frame: &Arc<Frame>) -> Option<Shown> {
+    fn acquire(&mut self, frame: &Arc<ViewPass>) -> Option<Shown> {
         let shared = lock(&self.shared);
         let (ring, at) = holding(&shared, frame)?;
         let view = ring.images[at].shown.view.clone();
@@ -139,7 +138,7 @@ impl Display for PixelDisplay {
         Some(Shown::new(frame.clone(), (ring.set, at as u32), view, pin))
     }
 
-    fn acquire_film(&mut self, frame: &Arc<Frame>, aovs: &[Aov]) -> Option<image::Image> {
+    fn acquire_film(&mut self, frame: &Arc<ViewPass>, aovs: &[Aov]) -> Option<image::Image> {
         let wanted: Vec<Output> = (aovs.iter())
             .filter_map(|a| Output::of_id(&a.id))
             .filter(|&o| o != Output::Beauty)
