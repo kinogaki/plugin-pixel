@@ -14,12 +14,14 @@ use super::Changed;
 use super::atlas::Atlas;
 use super::budget::{Budget, Part};
 use super::kernel::{bind_group, storage, uniform};
+use super::lights::GpuLight;
 use super::meshes::{Meshes, Span};
-use super::records::{GpuInstance, GpuLight, GpuMedium, Vertex};
+use super::records::{GpuInstance, GpuMedium, Vertex};
 use crate::render::bvh::{Bvh, Tlas};
 use crate::render::vector::V3;
-use crate::render::{Instance, Mesh, Picture, Scene, Surface, Volume};
+use crate::render::{Instance, Mesh, Picture, Scene, Surface, Volume, glow_meshes};
 use kinogaki_render_api::display::wgpu;
+use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
@@ -44,18 +46,23 @@ pub struct Instances {
 
 impl Instances {
     /// `instances` of `meshes` (as [`Meshes::build`] laid out `bvhs`), with
-    /// the materials `surfaces`, their pictures in `atlas`.
+    /// the materials `surfaces`, their pictures in `atlas`: the first
+    /// `traced` traced and drawn, the rest (the lights' shapes) drawn alone,
+    /// after them, in no top-level leaf.
     pub fn build(
-        instances: &[Instance],
+        (instances, traced): (&[Instance], usize),
         (meshes, bvhs): (&Meshes, &[Arc<Mesh>]),
         surfaces: &[Surface],
         atlas: &Atlas,
     ) -> Instances {
-        let boxes: Vec<_> = (instances.iter())
+        let boxes: Vec<_> = (instances[..traced].iter())
             .map(|i| world_bounds(&i.to_world, bvhs[i.mesh as usize].bvh.bounds()))
             .collect();
         let tlas = Tlas::build(&boxes);
-        let placed: Vec<&Instance> = tlas.order.iter().map(|&k| &instances[k as usize]).collect();
+        let placed: Vec<&Instance> = (tlas.order.iter())
+            .map(|&k| &instances[k as usize])
+            .chain(&instances[traced..])
+            .collect();
         let records = (placed.iter())
             .map(|i| {
                 GpuInstance::of(
@@ -100,6 +107,53 @@ impl Instances {
             Part::of("its drawn instances", &self.drawn, false),
             Part::of("its instances' nodes", &self.tlas.nodes, true),
         ]
+    }
+}
+
+/// What the G-buffer draws: the scene's meshes, instances and materials,
+/// then the unit shapes the lights' glows place, the glows (drawn alone,
+/// traced by no ray) and their unlit materials.
+struct Drawn<'a> {
+    meshes: Cow<'a, [Arc<Mesh>]>,
+    instances: Cow<'a, [Instance]>,
+    surfaces: Cow<'a, [Surface]>,
+}
+
+impl Drawn<'_> {
+    fn of(scene: &Scene) -> Drawn<'_> {
+        if scene.glows.is_empty() {
+            return Drawn {
+                meshes: Cow::Borrowed(&scene.meshes),
+                instances: Cow::Borrowed(&scene.instances),
+                surfaces: Cow::Borrowed(&scene.surfaces),
+            };
+        }
+        let mut meshes = scene.meshes.clone();
+        let first = meshes.len() as u32;
+        meshes.extend(glow_meshes().iter().cloned());
+        let mut surfaces = scene.surfaces.clone();
+        let mut instances = scene.instances.clone();
+        for glow in &scene.glows {
+            surfaces.push(Surface {
+                color: glow.radiance,
+                unlit: true,
+                ..Surface::default()
+            });
+            instances.push(Instance {
+                mesh: first + glow.mesh as u32,
+                to_world: glow.to_world,
+                to_own: None,
+                surface: surfaces.len() as u32 - 1,
+                id: 0,
+                tint: None,
+                alpha: None,
+            });
+        }
+        Drawn {
+            meshes: Cow::Owned(meshes),
+            instances: Cow::Owned(instances),
+            surfaces: Cow::Owned(surfaces),
+        }
     }
 }
 
@@ -313,7 +367,7 @@ impl GpuScene {
         });
         let meshes = Meshes::build(&[]);
         let atlas = Atlas::pack(&[]);
-        let instances = Instances::build(&[], (&meshes, &[]), &[], &atlas);
+        let instances = Instances::build((&[], 0), (&meshes, &[]), &[], &atlas);
         let texels = texels(device, queue, &atlas);
         let mut made = GpuScene {
             group: Self::bind(device, &layout, &buffers, &texels),
@@ -347,15 +401,16 @@ impl GpuScene {
         let budget = Budget::of(device);
         let repacked = changed.surfaces && !same_pictures(&self.atlas.0, &scene.pictures);
         let atlas = repacked.then(|| Atlas::pack(&scene.pictures));
-        let written = (changed.meshes).then(|| self.meshes.rewrite(&scene.meshes));
-        let meshes = matches!(written, Some(None)).then(|| Meshes::build(&scene.meshes));
+        let drawn = Drawn::of(scene);
+        let written = (changed.meshes).then(|| self.meshes.rewrite(&drawn.meshes));
+        let meshes = matches!(written, Some(None)).then(|| Meshes::build(&drawn.meshes));
         let instances = (changed.meshes || changed.instances).then(|| {
             let laid = meshes.as_ref().unwrap_or(&self.meshes);
             let atlas = atlas.as_ref().unwrap_or(&self.atlas.1);
             Instances::build(
-                &scene.instances,
-                (laid, &scene.meshes),
-                &scene.surfaces,
+                (&drawn.instances, scene.instances.len()),
+                (laid, &drawn.meshes),
+                &drawn.surfaces,
                 atlas,
             )
         });
@@ -398,7 +453,7 @@ impl GpuScene {
             self.buffers[INSTANCES] = buffer(device, "pixel instances", &i.records, STORAGE);
             self.instances = i;
         } else if changed.surfaces {
-            self.instances.restyle(&scene.surfaces, &self.atlas.1);
+            self.instances.restyle(&drawn.surfaces, &self.atlas.1);
             let records = &self.instances.records;
             self.buffers[INSTANCES] = buffer(device, "pixel instances", records, STORAGE);
         }
@@ -538,7 +593,12 @@ mod tests {
             instance(0, 2.0, 3),
             instance(1, 4.0, 1),
         ];
-        let i = Instances::build(&placed, (&m, &meshes), &surfaces, &Atlas::pack(&[]));
+        let i = Instances::build(
+            (&placed, placed.len()),
+            (&m, &meshes),
+            &surfaces,
+            &Atlas::pack(&[]),
+        );
         // Two draws: mesh 0 once, mesh 1 twice.
         let runs: Vec<_> = (i.draws.iter())
             .map(|(span, r)| (span.indices.clone(), r.len()))
@@ -560,7 +620,12 @@ mod tests {
                 alpha,
                 ..instance(0, 0.0, 0)
             }];
-            let i = Instances::build(&placed, (&m, &meshes), &surfaces, &Atlas::pack(&[]));
+            let i = Instances::build(
+                (&placed, placed.len()),
+                (&m, &meshes),
+                &surfaces,
+                &Atlas::pack(&[]),
+            );
             (i.records[0].id[2], i.records[0].tint)
         };
         assert_eq!(own(None, None), (0, [0.0, 0.0, 0.0, 1.0]));

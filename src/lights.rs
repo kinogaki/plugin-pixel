@@ -2,7 +2,7 @@
 //! of them, and what each prim lights a frame with.
 //!
 //! - **Lights** (`kinogaki.pixel.light`, placed): UsdLux's standard rect,
-//!   disk and dome lights; its distant and sphere lights, the standard ones
+//!   disk, cylinder and dome lights; its distant and sphere lights, the standard ones
 //!   with a **Gobo** section (a mask of dappled light, as if through leaves
 //!   out of frame); and the **Rim Light** (`kinogaki.pixel.rim_light`), a
 //!   Fresnel-like edge, (1 − n·v)⁴ × its emission, added where direct light
@@ -12,8 +12,13 @@
 //!   when In-scatter is on.
 //!
 //! Emissions become colors here, at luminance 1 (the SDK's
-//! [`Emission::color`]): Pixel renders in RGB.
-use crate::render::Gobo;
+//! [`Emission::color`]): Pixel renders in RGB. A standard light becomes
+//! Pixel's ([`light_of`]): a point of its shape's power at its centre (or
+//! parallel light), shaped, shadowed, its shape drawn when the camera sees
+//! it.
+use crate::render::{Glow, GlowMesh, Gobo, Light, LightShape, PROFILE, Shadow, Shaping};
+use kinogaki_render_api::geometry::Xform;
+use kinogaki_render_api::geometry::image::TextureImage;
 use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, Schema, Value, ValueKind};
 use kinogaki_render_api::{Declared, Parameter, PrimType, PrimTypeId, Role, Section};
@@ -92,11 +97,10 @@ fn rim_light() -> PrimType {
     PrimType::new(RIM_LIGHT, "Rim Light", Role::Light, schema)
 }
 
-/// Pixel's light types, in the order menus list them: the standard ones but
-/// the cylinder (a Gobo on distant and sphere lights), then the rim light.
+/// Pixel's light types, in the order menus list them: the standard ones (a
+/// Gobo on distant and sphere lights), then the rim light.
 pub fn light_types() -> Vec<PrimType> {
     (standard::lights().into_iter())
-        .filter(|ty| ty.id != standard::CYLINDER_LIGHT)
         .map(|ty| match ty.id {
             standard::DISTANT_LIGHT | standard::SPHERE_LIGHT => ty.merged(gobo_section()),
             _ => ty,
@@ -142,6 +146,144 @@ pub fn gobo(prim: &Declared) -> Option<Gobo> {
     })
 }
 
+/// `prim` as a light with a place or a direction, and the shape of it the
+/// camera sees (its Visible to Camera on), its images (a rect's color map,
+/// an IES profile) by `texture`: none for a dome or another type. Both
+/// shine a color map's mean; the light's radiance takes its Diffuse too
+/// (Pixel shades diffuse light alone; Specular has nothing to scale).
+pub fn light_of(
+    prim: &Declared,
+    texture: &dyn Fn(&str) -> Option<TextureImage>,
+) -> Option<(Light, Option<Glow>)> {
+    let light = standard::Light::decode(prim)?;
+    let mut radiance = light.radiance();
+    let rows = rows(&light.xform.at(0.0));
+    let scaled = |sx: f32, sy: f32, sz: f32| rows.map(|r| [r[0] * sx, r[1] * sy, r[2] * sz, r[3]]);
+    let (shape, glow) = match light.shape {
+        standard::LightShape::Rect { width, height, .. } => {
+            if let Some(map) = texture("texture") {
+                let mean = mean_color(&map);
+                radiance = std::array::from_fn(|k| radiance[k] * mean[k]);
+            }
+            let area = LightShape::Area {
+                area: width * height,
+            };
+            (area, Some((GlowMesh::Rect, scaled(width, height, 1.0))))
+        }
+        standard::LightShape::Disk { radius } => {
+            let area = std::f32::consts::PI * radius * radius;
+            let d = 2.0 * radius;
+            (
+                LightShape::Area { area },
+                Some((GlowMesh::Disk, scaled(d, d, 1.0))),
+            )
+        }
+        standard::LightShape::Sphere { radius, point } => {
+            let d = 2.0 * radius;
+            let glow = (!point).then_some((GlowMesh::Sphere, scaled(d, d, d)));
+            (LightShape::Sphere { radius, point }, glow)
+        }
+        standard::LightShape::Cylinder {
+            length,
+            radius,
+            line,
+        } => {
+            let d = 2.0 * radius;
+            let glow = (!line).then_some((GlowMesh::Tube, scaled(length, d, d)));
+            (
+                LightShape::Cylinder {
+                    length,
+                    radius,
+                    line,
+                },
+                glow,
+            )
+        }
+        standard::LightShape::Distant { angle } => (LightShape::Distant { angle }, None),
+        standard::LightShape::Dome { .. } => return None,
+    };
+    let shaping = light.shaping.as_ref().map(|s| {
+        let cone = s.cone_angle.clamp(0.0, 180.0).to_radians();
+        Shaping {
+            cone,
+            start: cone * (1.0 - s.cone_softness.clamp(0.0, 1.0)),
+            focus: s.focus.max(0.0),
+            tint: s.focus_tint,
+            profile: texture("iesFile").map(|t| profile_of(&t, s.ies_normalize)),
+            angle_scale: s.ies_angle_scale,
+        }
+    });
+    let shadow = &light.shadow;
+    let shadow = Shadow {
+        color: shadow.color,
+        reach: if shadow.enable { shadow.distance } else { 0.0 },
+        falloff: shadow.falloff,
+        gamma: shadow.falloff_gamma,
+    };
+    let (camera, diffuse) = (light.camera, light.diffuse.max(0.0));
+    let light = Light {
+        shape,
+        radiance: radiance.map(|c| c * diffuse),
+        normalize: light.normalize,
+        rows,
+        gobo: gobo(prim),
+        shaping,
+        shadow,
+    };
+    let over = match light.normalize {
+        true => 1.0 / light.area().unwrap_or(1.0).max(f32::MIN_POSITIVE),
+        false => 1.0,
+    };
+    let glow = glow.filter(|_| camera).map(|(mesh, to_world)| Glow {
+        mesh,
+        to_world,
+        radiance: radiance.map(|c| c * over),
+    });
+    Some((light, glow))
+}
+
+/// Three rows of `x`, single precision.
+fn rows(x: &Xform) -> [[f32; 4]; 3] {
+    x.rows().map(|r| r.map(|v| v as f32))
+}
+
+/// Texels a side a color map's mean reads at most.
+const MEAN_SAMPLES: u32 = 64;
+
+/// `map`'s mean color over a grid of at most [`MEAN_SAMPLES`]² texels.
+fn mean_color(map: &TextureImage) -> [f32; 3] {
+    let data = map.image.data();
+    let ([width, height], [x0, y0]) = (data.size(), data.min());
+    let step = |n: u32| n.div_ceil(MEAN_SAMPLES).max(1);
+    let (sx, sy) = (step(width), step(height));
+    let (mut sum, mut count) = ([0.0f64; 3], 0.0f64);
+    for y in (0..height).step_by(sy as usize) {
+        for x in (0..width).step_by(sx as usize) {
+            let t = map.texel(x0 + x as i32, y0 + y as i32);
+            sum = std::array::from_fn(|k| sum[k] + f64::from(t[k]));
+            count += 1.0;
+        }
+    }
+    sum.map(|c| (c / count.max(1.0)) as f32)
+}
+
+/// An IES profile's image (render-api's `standard::ies` layout: candela,
+/// then over its power) as [`Shaping::profile`]: its candela at each of
+/// [`PROFILE`] vertical angles, the mean around its axis.
+fn profile_of(profile: &TextureImage, normalized: bool) -> [f32; PROFILE] {
+    let data = profile.image.data();
+    let ([width, height], [x0, y0]) = (data.size(), data.min());
+    let channel = if normalized { 3 } else { 0 };
+    std::array::from_fn(|k| {
+        let theta = (k as f32 + 0.5) / PROFILE as f32;
+        let y = ((theta * height as f32) as u32).min(height.saturating_sub(1));
+        let sum: f32 = (0..width)
+            .map(|x| profile.texel(x0 + x as i32, y0 + y as i32)[channel])
+            .sum();
+        sum / width.max(1) as f32
+    })
+}
+
 /// Whether a rim light shows all round, rather than where direct light
 /// reaches.
 pub fn rim_all_round(prim: &Declared) -> bool {
@@ -170,6 +312,7 @@ mod tests {
                 standard::RECT_LIGHT,
                 standard::DISK_LIGHT,
                 standard::SPHERE_LIGHT,
+                standard::CYLINDER_LIGHT,
                 standard::DISTANT_LIGHT,
                 standard::DOME_LIGHT,
                 RIM_LIGHT
@@ -178,7 +321,7 @@ mod tests {
         let gobo_of = |t: &PrimType| t.schema().parameters().any(|d| &*d.name == "goboScale");
         assert_eq!(
             types.iter().map(gobo_of).collect::<Vec<_>>(),
-            [false, false, true, true, false, false]
+            [false, false, true, false, true, false, false]
         );
         // Off by default, decoded when on.
         let spot = declared(&types[2], &[]);
@@ -195,6 +338,68 @@ mod tests {
         assert_eq!(
             (g.scale, g.contrast, g.seed, g.offset),
             (1.0, 0.5, 9, [1.0, -2.0])
+        );
+    }
+
+    #[test]
+    fn a_light_shows_its_shape_when_seen_its_color_maps_mean_in_both() {
+        let sphere = |camera: bool, normalize: bool| standard::Light {
+            shape: standard::LightShape::Sphere {
+                radius: 0.5,
+                point: false,
+            },
+            intensity: 2.0,
+            diffuse: 0.5,
+            normalize,
+            camera,
+            ..standard::Light::default()
+        };
+        let none = |_: &str| None;
+        let (light, glow) = light_of(&sphere(false, false).declared(), &none).unwrap();
+        assert_eq!(
+            (light.radiance, glow),
+            ([1.0; 3], None),
+            "Diffuse on the light alone"
+        );
+        let (_, glow) = light_of(&sphere(true, false).declared(), &none).unwrap();
+        let glow = glow.unwrap();
+        assert_eq!(
+            (glow.mesh, glow.radiance, glow.to_world[0][0]),
+            (GlowMesh::Sphere, [2.0; 3], 1.0)
+        );
+        // Normalized, it shines its power over its area, 4π r².
+        let (_, glow) = light_of(&sphere(true, true).declared(), &none).unwrap();
+        assert!((glow.unwrap().radiance[0] - 2.0 / std::f32::consts::PI).abs() < 1e-6);
+        // A point shows nothing; a rect's color map tints both by its mean.
+        let point = standard::Light {
+            shape: standard::LightShape::Sphere {
+                radius: 0.5,
+                point: true,
+            },
+            ..sphere(true, false)
+        };
+        assert_eq!(light_of(&point.declared(), &none).unwrap().1, None);
+        let map = {
+            use kinogaki_render_api::geometry::image::{
+                Decoding, Encoding, Format, Image, Rect, Sample,
+            };
+            let format = Format::rgba(Sample::F32, Encoding::color("ACEScg", false));
+            let texels = [1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0];
+            let image = Image::builder(Rect::new([0, 0], [2, 1]).unwrap()).plane(format, &texels);
+            TextureImage {
+                image: image.build().unwrap(),
+                decoding: Some(Decoding::IDENTITY),
+            }
+        };
+        let rect = standard::Light {
+            camera: true,
+            ..standard::Light::default()
+        };
+        let mapped = |row: &str| (row == "texture").then(|| map.clone());
+        let (light, glow) = light_of(&rect.declared(), &mapped).unwrap();
+        assert_eq!(
+            (light.radiance, glow.unwrap().radiance),
+            ([0.5, 0.0, 0.5], [0.5, 0.0, 0.5])
         );
     }
 

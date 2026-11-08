@@ -80,7 +80,7 @@ fn march_step(m: ptr<function, March>, x: vec3<f32>, t: f32, delta: f32, d: vec3
         let origin = x + a.wi * ray_offset(t);
         var visible = vec3<f32>(gobo(l, x, u32(l.normal.w)) * medium_transmittance(origin, a.wi, a.reach));
         if shadows {
-            visible *= transmittance(origin, a.wi, a.reach);
+            visible *= unshadowed(l, origin, a.wi, a.reach);
         }
         // Light travels along −wi and leaves toward the camera along −d.
         let cos_theta = dot(a.wi, d);

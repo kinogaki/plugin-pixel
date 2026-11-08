@@ -44,8 +44,7 @@ use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Look, Material};
 use crate::pictures;
 use crate::render::{
-    Ambient, Corners, Fog, Instance, Light, LightShape, Mesh, Picture, Rims, Scene, Surface,
-    Texture, Volume,
+    Ambient, Corners, Fog, Instance, Mesh, Picture, Rims, Scene, Surface, Texture, Volume,
 };
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
 use kinogaki_render_api::standard::{self, LightShape as LightKind};
@@ -119,7 +118,9 @@ impl Touched {
     fn by(&mut self, prim: &Prim) {
         match prim {
             Prim::Shape(_) | Prim::Instancer(_) => self.shapes = true,
-            Prim::Material(_) | Prim::Texture(_) => self.materials = true,
+            Prim::Material(_) => self.materials = true,
+            // Lights read textures too (a color map, an IES profile).
+            Prim::Texture(_) => (self.materials, self.declared) = (true, true),
             Prim::Declared(_) => self.declared = true,
             _ => {}
         }
@@ -200,8 +201,11 @@ impl Sync {
             changed.volumes = volumes != self.scene.volumes;
         }
         if touched.declared {
+            let glows = self.scene.glows.clone();
             self.read_lights();
             changed.lights = true;
+            // The shapes the camera sees are drawn with the instances.
+            changed.instances |= glows != self.scene.glows;
         }
         changed
     }
@@ -523,6 +527,7 @@ impl Sync {
     fn read_lights(&mut self) {
         let (mut lights, mut ambient, mut rims, mut fog) =
             (Vec::new(), Ambient::default(), Rims::default(), None);
+        let mut glows = Vec::new();
         for prim in self.prims.values() {
             let Prim::Declared(prim) = prim else {
                 continue;
@@ -543,53 +548,33 @@ impl Sync {
             let Some(light) = standard::Light::decode(prim) else {
                 continue;
             };
-            let radiance = light.radiance();
-            let shape = match light.shape {
-                LightKind::Dome { ground, .. } => {
-                    add(&mut ambient.sky, radiance);
-                    let scale = light.intensity * light.exposure.exp2();
-                    add(
-                        &mut ambient.ground,
-                        ground.map_or(radiance, |g| g.map(|c| c * scale)),
-                    );
-                    ambient.seen |= light.camera;
-                    continue;
-                }
-                LightKind::Rect { width, height, .. } => LightShape::Area {
-                    area: width * height,
-                },
-                LightKind::Disk { radius } => LightShape::Area {
-                    area: std::f32::consts::PI * radius * radius,
-                },
-                LightKind::Distant { angle } => LightShape::Distant { angle },
-                // A sphere is a spot of its shaping's cone (180° unshaped).
-                LightKind::Sphere { radius, .. } => {
-                    let shaping = light.shaping.clone().unwrap_or(standard::Shaping {
-                        cone_angle: 180.0,
-                        ..standard::Shaping::default()
-                    });
-                    LightShape::Spot {
-                        radius,
-                        cone_angle: shaping.cone_angle,
-                        cone_softness: shaping.cone_softness,
-                    }
-                }
-                LightKind::Cylinder { .. } => continue,
+            if let LightKind::Dome { ground, .. } = light.shape {
+                let radiance = light.radiance().map(|c| c * light.diffuse.max(0.0));
+                add(&mut ambient.sky, radiance);
+                let scale = light.intensity * light.exposure.exp2() * light.diffuse.max(0.0);
+                add(
+                    &mut ambient.ground,
+                    ground.map_or(radiance, |g| g.map(|c| c * scale)),
+                );
+                ambient.seen |= light.camera;
+                continue;
+            }
+            let texture = |name: &str| match self.prims.get(&prim.textures.get(name)?.prim()) {
+                Some(Prim::Texture(read)) => Some(read.clone()),
+                _ => None,
             };
-            lights.push(Light {
-                shape,
-                radiance,
-                normalize: light.normalize,
-                rows: rows(&prim.xform.at(0.0)),
-                gobo: lights::gobo(prim),
-            });
+            if let Some((light, glow)) = lights::light_of(prim, &texture) {
+                lights.push(light);
+                glows.extend(glow);
+            }
         }
         (
             self.scene.lights,
+            self.scene.glows,
             self.scene.ambient,
             self.scene.rims,
             self.scene.fog,
-        ) = (lights, ambient, rims, fog);
+        ) = (lights, glows, ambient, rims, fog);
     }
 
     /// The camera `camera` names, as the renderer takes it (none: a prim it

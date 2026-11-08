@@ -20,6 +20,7 @@ use kinogaki_render_api::display::wgpu;
 mod atlas;
 mod budget;
 mod kernel;
+mod lights;
 mod meshes;
 mod passes;
 pub mod readback;

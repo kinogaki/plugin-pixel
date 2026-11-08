@@ -8,10 +8,12 @@ pub mod bvh;
 pub mod camera;
 pub mod dither;
 pub mod film;
+mod light;
 mod mesh;
 pub mod settings;
 pub mod vector;
 
+pub use light::{Glow, GlowMesh, Gobo, Light, LightShape, PROFILE, Shadow, Shaping, glow_meshes};
 pub use mesh::{Corners, Mesh};
 
 use std::sync::Arc;
@@ -32,6 +34,8 @@ pub struct Scene {
     pub volumes: Vec<Volume>,
     /// The lights with a place or a direction.
     pub lights: Vec<Light>,
+    /// The lights' shapes the camera sees.
+    pub glows: Vec<Glow>,
     /// The domes' light.
     pub ambient: Ambient,
     /// The rim lights' light.
@@ -225,60 +229,6 @@ pub struct Medium {
     pub edge_falloff: f32,
     /// Whether it dims the lights' light passing through it.
     pub shadows: bool,
-}
-
-/// A light with a place or a direction.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Light {
-    /// Its shape.
-    pub shape: LightShape,
-    /// Its radiance: the emission's color × intensity × 2^exposure.
-    pub radiance: [f32; 3],
-    /// Its power does not change with its size.
-    pub normalize: bool,
-    /// Light to world: three rows (it shines down its -Z).
-    pub rows: [[f32; 4]; 3],
-    /// Its cookie, on distant lights and spots.
-    pub gobo: Option<Gobo>,
-}
-
-/// A light's shape, as UsdLux shapes it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum LightShape {
-    /// A rectangle or disk of `area` in its XY plane.
-    Area {
-        /// Its area in its own units.
-        area: f32,
-    },
-    /// Parallel light `angle` degrees across.
-    Distant {
-        /// The sun's size across.
-        angle: f32,
-    },
-    /// A sphere of `radius` in a cone about its -Z.
-    Spot {
-        /// Its radius.
-        radius: f32,
-        /// The cone's half-angle, degrees.
-        cone_angle: f32,
-        /// The share of the cone its light fades over.
-        cone_softness: f32,
-    },
-}
-
-/// A mask of dappled light on a distant light or spot, as if through leaves
-/// out of frame: value-noise fBm on the light's plane, `scale` scene units a
-/// feature, its edges `contrast` hard.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Gobo {
-    /// The pattern's features' size, scene units.
-    pub scale: f32,
-    /// 0 a soft mottle, 1 hard light and shade.
-    pub contrast: f32,
-    /// Picks the pattern.
-    pub seed: u32,
-    /// Slides the pattern across the plane, scene units.
-    pub offset: [f32; 2],
 }
 
 /// The domes' light: their radiance from above and from below the horizon,

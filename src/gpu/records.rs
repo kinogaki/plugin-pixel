@@ -1,24 +1,13 @@
 //! What the passes read, as the shaders lay it out: the G-buffer's vertices,
-//! the cut-out triangles' corners rays read, the instances, the lights, the
-//! volumes and the per-frame uniform. Each packs from the renderer's scene.
-//!
-//! Each light kind lights a white Lambert surface as the direct pass reads it:
-//! - **area** (rect, disk): a point emitter at its centre, power radiance ×
-//!   area (UsdLux), falling off as 1 / (d² + area / π);
-//! - **distant**: parallel light of its illuminance, no falloff: the
-//!   radiance × π sin²(angle / 2), or the intensity itself when it
-//!   normalizes or is a delta (angle 0);
-//! - **spot**: a sphere seen from outside is a point of radiant intensity
-//!   radiance × π r² (normalized: over its area 4π r²), falling off as 1 /
-//!   max(d², r²), times the cone's falloff.
+//! the cut-out triangles' corners rays read, the instances, the volumes and
+//! the per-frame uniform (the lights are `lights`'). Each packs from the
+//! renderer's scene.
 use super::atlas::Atlas;
 use super::meshes::Span;
 use crate::render::camera::CameraFrame;
 use crate::render::settings::{MAX_LEVELS, Settings};
 use crate::render::vector::V3;
-use crate::render::{
-    Ambient, Fog, Instance, Light, LightShape, Rims, Surface, Volume, Wrap, dither,
-};
+use crate::render::{Ambient, Fog, Instance, Rims, Surface, Volume, Wrap, dither};
 use bytemuck::{Pod, Zeroable};
 
 /// A G-buffer vertex: one per triangle corner, in its mesh's own space.
@@ -147,100 +136,6 @@ impl GpuInstance {
         self.factor = t.factor;
         let seen: [f32; 3] = std::array::from_fn(|k| surface.color[k] * t.factor[k] * mean[k]);
         self.mean = V3::of(seen).with_w(0.0);
-    }
-}
-
-/// Kind codes (`normal.w` of a light).
-const AREA: f32 = 0.0;
-const DISTANT: f32 = 1.0;
-const SPOT: f32 = 2.0;
-
-/// A light as the passes read it (`Light` in light.wgsl).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct GpuLight {
-    /// xyz: the centre; w: the falloff's r².
-    pub position: [f32; 4],
-    /// xyz: where it shines (its -Z), unit; w: its kind.
-    pub normal: [f32; 4],
-    /// rgb: an area light's power, a spot's intensity, a distant light's
-    /// illuminance.
-    pub power: [f32; 4],
-    /// x, y: a spot's cone cosines (outer, inner); z: the gobo's contrast;
-    /// w: 1 with a gobo.
-    pub cone: [f32; 4],
-    /// The gobo's plane: xyz the light's X over the gobo's scale, w the
-    /// offset's x over it.
-    pub gobo_x: [f32; 4],
-    /// The light's Y over the scale, w the offset's y over it.
-    pub gobo_y: [f32; 4],
-    /// x: the gobo's seed.
-    pub seed: [u32; 4],
-}
-
-/// The axes and origin of three rows of an affine matrix.
-fn frame_of(rows: &[[f32; 4]; 3]) -> [V3; 4] {
-    std::array::from_fn(|i| V3::new(rows[0][i], rows[1][i], rows[2][i]))
-}
-
-impl GpuLight {
-    /// `light` packed, its sizes in world space (its scale included).
-    pub fn of(light: &Light) -> GpuLight {
-        let [x, y, z, centre] = frame_of(&light.rows);
-        let radiance = V3::of(light.radiance);
-        let pi = std::f32::consts::PI;
-        let mut cone = [1.0f32, 1.0, 0.0, 0.0];
-        let (kind, r2, scale) = match light.shape {
-            LightShape::Area { area } => {
-                let area = area * x.length() * y.length();
-                let scale = if light.normalize { 1.0 } else { area };
-                (AREA, area / pi, scale)
-            }
-            LightShape::Distant { angle } => {
-                let solid = pi * (angle.to_radians() * 0.5).sin().powi(2);
-                let delta = angle <= 0.0;
-                (
-                    DISTANT,
-                    0.0,
-                    if light.normalize || delta { 1.0 } else { solid },
-                )
-            }
-            LightShape::Spot {
-                radius,
-                cone_angle,
-                cone_softness,
-            } => {
-                let r = radius * (x.length() + y.length() + z.length()) / 3.0;
-                let angle = cone_angle.clamp(0.0, 180.0);
-                cone[0] = angle.to_radians().cos();
-                cone[1] = (angle * (1.0 - cone_softness.clamp(0.0, 1.0)))
-                    .to_radians()
-                    .cos();
-                let normalized = match light.normalize && r > 0.0 {
-                    true => 1.0 / (4.0 * pi * r * r),
-                    false => 1.0,
-                };
-                (SPOT, r * r, normalized * pi * r * r)
-            }
-        };
-        let mut packed = GpuLight {
-            position: centre.with_w(r2),
-            normal: (-z).unit_or(V3::new(0.0, 0.0, -1.0)).with_w(kind),
-            power: (radiance * scale).with_w(0.0),
-            cone,
-            ..GpuLight::default()
-        };
-        // Area lights take no gobo.
-        if let Some(g) = light.gobo.filter(|_| kind != AREA) {
-            let s = g.scale.max(1e-6);
-            let unit = |v: V3| v.unit_or(V3::ZERO) * (1.0 / s);
-            packed.cone[2] = g.contrast.clamp(0.0, 1.0);
-            packed.cone[3] = 1.0;
-            packed.gobo_x = unit(x).with_w(g.offset[0] / s);
-            packed.gobo_y = unit(y).with_w(g.offset[1] / s);
-            packed.seed[0] = g.seed;
-        }
-        packed
     }
 }
 
@@ -405,91 +300,6 @@ impl Frame {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::Gobo;
-
-    const IDENTITY: [[f32; 4]; 3] = [
-        [1.0, 0.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0, 0.0],
-        [0.0, 0.0, 1.0, 0.0],
-    ];
-
-    fn light(shape: LightShape, radiance: f32) -> Light {
-        Light {
-            shape,
-            radiance: [radiance; 3],
-            normalize: false,
-            rows: IDENTITY,
-            gobo: None,
-        }
-    }
-
-    #[test]
-    fn area_lights_pack_their_power_and_direction() {
-        let mut rows = IDENTITY;
-        rows[0][0] = 2.0;
-        let rect = Light {
-            rows,
-            gobo: Some(Gobo {
-                scale: 1.0,
-                contrast: 0.5,
-                seed: 0,
-                offset: [0.0; 2],
-            }),
-            ..light(LightShape::Area { area: 3.0 }, 10.0)
-        };
-        let g = GpuLight::of(&rect);
-        assert_eq!(g.power[0], 10.0 * 6.0);
-        assert!((g.position[3] - 6.0 / std::f32::consts::PI).abs() < 1e-6);
-        assert_eq!(g.normal, [0.0, 0.0, -1.0, AREA]);
-        assert_eq!(g.cone[3], 0.0, "area lights take no gobo");
-        let normalized = GpuLight::of(&Light {
-            normalize: true,
-            ..rect
-        });
-        assert_eq!(normalized.power[0], 10.0);
-    }
-
-    #[test]
-    fn distant_lights_pack_their_illuminance() {
-        let sun = |angle: f32, normalize| {
-            let sun = light(LightShape::Distant { angle }, 50_000.0);
-            GpuLight::of(&Light { normalize, ..sun })
-        };
-        // UsdLux's sun: radiance 50,000 over a 0.53° disk is about 3.4.
-        assert!((sun(0.53, false).power[0] - 3.36).abs() < 0.01);
-        assert_eq!(sun(0.53, true).power[0], 50_000.0);
-        assert_eq!(sun(0.0, false).power[0], 50_000.0, "a delta's illuminance");
-        assert_eq!(sun(0.53, false).normal[3], DISTANT);
-    }
-
-    #[test]
-    fn spots_pack_their_intensity_cone_and_gobo() {
-        let spot = Light {
-            gobo: Some(Gobo {
-                scale: 2.0,
-                contrast: 0.75,
-                seed: 9,
-                offset: [1.0, -4.0],
-            }),
-            ..light(
-                LightShape::Spot {
-                    radius: 0.5,
-                    cone_angle: 30.0,
-                    cone_softness: 0.5,
-                },
-                4.0,
-            )
-        };
-        let g = GpuLight::of(&spot);
-        let pi = std::f32::consts::PI;
-        assert!((g.power[0] - 4.0 * pi * 0.25).abs() < 1e-5);
-        assert_eq!(g.position[3], 0.25);
-        assert!((g.cone[0] - 30f32.to_radians().cos()).abs() < 1e-6);
-        assert!((g.cone[1] - 15f32.to_radians().cos()).abs() < 1e-6);
-        assert_eq!((g.cone[2], g.cone[3], g.seed[0]), (0.75, 1.0, 9));
-        assert_eq!(g.gobo_x, [0.5, 0.0, 0.0, 0.5]);
-        assert_eq!(g.gobo_y, [0.0, 0.5, 0.0, -2.0]);
-    }
 
     #[test]
     fn the_frame_holds_each_level_of_both_ramps() {

@@ -3,6 +3,7 @@
 mod conformance;
 mod cutouts;
 mod engine;
+mod lights;
 mod limits;
 mod moves;
 mod support;
