@@ -1,29 +1,19 @@
-//! Pixel's render settings, as a Render Output shows them ([`descriptors`],
-//! by [`groups`]) and as a frame renders them ([`read`]): Pixels (Pixel
-//! Size, Shade Levels, the dither and the Shade Ramp), Ambient Occlusion,
-//! Global Illumination and Volumes.
+//! Pixel's render settings, as a Render Output shows them ([`schema`]) and
+//! as a frame renders them ([`read`]): Pixels (Pixel Size, Shade Levels,
+//! the dither and the Shade Ramp), Ambient Occlusion, Global Illumination
+//! and Volumes.
 use crate::render::dither::Dither;
 use crate::render::settings::{MAX_GI_SAMPLES, MAX_LEVELS, MAX_VOLUME_STEPS, Settings};
-use kinogaki_render_api::settings::fit;
 use kinogaki_render_api::value::ramp::{Interpolation, Key};
-use kinogaki_render_api::value::{Choice, Parameters, ParametersExt, Ramp, Value, ValueKind};
+use kinogaki_render_api::value::{
+    Choice, Parameters, ParametersExt, Ramp, Schema, Value, ValueKind,
+};
 use kinogaki_render_api::{Parameter, Section, standard};
 
 const PIXELS: &str = "pixels";
 const OCCLUSION: &str = "occlusion";
 const BOUNCE: &str = "gi";
 const VOLUMES: &str = "volumes";
-
-/// The settings' groups, in order.
-pub fn groups() -> Vec<Section> {
-    let group = |name, label| Section::new(name, label, true);
-    vec![
-        group(PIXELS, "Pixels"),
-        group(OCCLUSION, "Ambient Occlusion"),
-        group(BOUNCE, "Global Illumination"),
-        group(VOLUMES, "Volumes"),
-    ]
-}
 
 /// The dithers, by key, as the Dither row offers them.
 const DITHERS: [(Dither, &str, &str); 4] = [
@@ -47,13 +37,20 @@ fn default_ramp() -> Ramp {
     }
 }
 
-/// The settings, in the order a Render Output lists them.
-pub fn descriptors() -> Vec<Parameter> {
+/// The settings, in the order a Render Output lists them, in their sections
+/// (Pixels, Ambient Occlusion, Global Illumination, Volumes; all open).
+pub fn schema() -> Schema {
     let most = i64::from(MAX_LEVELS);
     let dithers = DITHERS
         .map(|(_, key, label)| Choice::new(key, label))
         .to_vec();
-    vec![
+    let section = |name, label| Section::new(name, label, true);
+    let sections = (Schema::default())
+        .section(section(PIXELS, "Pixels"))
+        .section(section(OCCLUSION, "Ambient Occlusion"))
+        .section(section(BOUNCE, "Global Illumination"))
+        .section(section(VOLUMES, "Volumes"));
+    [
         Parameter::integer("pixel_size", "Pixel Size", 1, 64, 4)
             .group(PIXELS)
             .help("View pixels a film pixel covers"),
@@ -164,6 +161,8 @@ pub fn descriptors() -> Vec<Parameter> {
         .group(VOLUMES)
         .help("Dither on volumes and fog: below 1 only the bands' edges dither"),
     ]
+    .into_iter()
+    .fold(sections, Schema::parameter)
 }
 
 /// `ramp` at each of `levels` levels, darkest first.
@@ -177,7 +176,7 @@ fn table(ramp: &Ramp, levels: i64) -> Vec<[f32; 3]> {
 /// The settings `values` give (each missing or unfitting one at its
 /// default), with `up`, the world's up direction (unit).
 pub fn read(values: &Parameters, up: [f32; 3]) -> Settings {
-    let values = fit(&descriptors(), values);
+    let values = schema().fit(values);
     // Fitted: every value is there, of its kind.
     let number = |name: &str| values.number(name).unwrap_or(0.0) as f32;
     let integer = |name: &str| values.integer(name).unwrap_or(0);
@@ -230,12 +229,8 @@ mod tests {
         assert_eq!(s.shade_ramp[0], [0.035, 0.03, 0.09]);
         assert_eq!(s.shade_ramp[3], [1.12, 0.98, 0.76]);
         assert_eq!(s.volume_ramp.len(), 12);
-        let groups = groups();
-        assert!(
-            descriptors()
-                .iter()
-                .all(|d| groups.iter().any(|g| g.name == d.group))
-        );
+        assert_eq!(schema().check(), Ok(()));
+        assert!(schema().parameters().all(|d| !d.group.is_empty()));
     }
 
     #[test]
@@ -260,7 +255,7 @@ mod tests {
 
     #[test]
     fn sample_counts_are_never_keyed() {
-        let fixed: Vec<String> = (descriptors().into_iter())
+        let fixed: Vec<String> = (schema().parameters())
             .filter(|d| !d.animatable)
             .map(|d| d.name.to_string())
             .collect();

@@ -403,9 +403,9 @@ fn lights_domes_rims_and_fog_light_the_scene() {
         .into_iter()
         .find(|t| t.id == RIM_LIGHT)
         .unwrap();
-    let mut rim = Declared::new(RIM_LIGHT, rim_type.defaults());
+    let mut rim = Declared::new(RIM_LIGHT, rim_type.schema().values());
     rim.values.insert("side".into(), standard::choice("all"));
-    let mut fog = Declared::new(standard::FOG, standard::fog().defaults());
+    let mut fog = Declared::new(standard::FOG, standard::fog().schema().values());
     fog.values.insert("inscatter".into(), Value::Bool(true));
     let mut hidden = sun.clone();
     hidden.visibility.visible = false;

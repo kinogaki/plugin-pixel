@@ -45,7 +45,7 @@ pub fn description() -> EngineDescription {
     };
     EngineDescription::builder(ENGINE, "Pixel")
         .capabilities(capabilities)
-        .settings(settings::groups(), settings::descriptors())
+        .settings(settings::schema())
         .materials(nodes::defs(), Arc::new(nodes::Rules))
         .build()
 }

@@ -124,8 +124,7 @@ fn surface() -> NodeDef {
     def.aliases = ["pixel", "material", "surface", "flat", "toon", "sprite"]
         .map(Arc::from)
         .to_vec();
-    def.groups = vec![Section::new(MAIN, "Surface", true)];
-    def
+    def.section(Section::new(MAIN, "Surface", true))
 }
 
 /// The Pixel Volume.
@@ -226,12 +225,9 @@ fn volume() -> NodeDef {
     ]
     .map(Arc::from)
     .to_vec();
-    def.groups = vec![
-        Section::new(MAIN, "Volume", true),
-        Section::new(EMISSION, "Emission", false),
-        Section::new(NOISE, "Noise", false),
-    ];
-    def
+    def.section(Section::new(MAIN, "Volume", true))
+        .section(Section::new(EMISSION, "Emission", false))
+        .section(Section::new(NOISE, "Noise", false))
 }
 
 /// Pixel's nodes, in the order a host lists them.

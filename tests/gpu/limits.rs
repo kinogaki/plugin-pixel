@@ -167,7 +167,7 @@ fn lit_fog_over_no_surface_renders() {
         intensity: 3.0,
         ..Light::default()
     };
-    let mut fog = Declared::new(standard::FOG, standard::fog().defaults());
+    let mut fog = Declared::new(standard::FOG, standard::fog().schema().values());
     fog.values.insert("density".into(), Value::Number(0.5));
     fog.values.insert("inscatter".into(), Value::Bool(true));
     engine.update(SceneUpdate {

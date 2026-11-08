@@ -98,7 +98,7 @@ fn rendered(fog: bool, outputs: &[&str], pixels: &[(u32, u32)]) -> Vec<Vec<[f32;
         (id(5), Prim::Declared(sun.declared())),
     ];
     if fog {
-        let mut fog = Declared::new(standard::FOG, standard::fog().defaults());
+        let mut fog = Declared::new(standard::FOG, standard::fog().schema().values());
         for (name, value) in [
             ("density", Value::Number(1.0)),
             ("color", Value::Color([1.0; 3])),

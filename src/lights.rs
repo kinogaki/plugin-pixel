@@ -15,7 +15,7 @@
 //! [`Emission::color`]): Pixel renders in RGB.
 use crate::render::Gobo;
 use kinogaki_render_api::standard::{self, Emission};
-use kinogaki_render_api::value::{Choice, Condition, Number, Value, ValueKind};
+use kinogaki_render_api::value::{Choice, Condition, Number, Schema, Value, ValueKind};
 use kinogaki_render_api::{Declared, Parameter, PrimType, PrimTypeId, Role, Section};
 use kinogaki_studio_api::ObjectKindId;
 use kinogaki_studio_api::render::lights::DeclaredKind;
@@ -30,11 +30,13 @@ pub const RIM_LIGHT: PrimTypeId = PrimTypeId::declared("kinogaki.pixel.rim_light
 /// The Gobo section's group.
 const GOBO: &str = "gobo";
 
-/// The gobo's parameters, under `GOBO`: a toggle, then the pattern's.
-fn gobo_params() -> Vec<Parameter> {
+/// The Gobo section, opening with its toggle: the toggle, then the
+/// pattern's values.
+fn gobo_section() -> Schema {
     let on = || Condition::when("gobo", true);
     let shown = |d: Parameter| d.requires(on(), "Used with Gobo on");
-    vec![
+    let section = Section::new(GOBO, "Gobo", false).open_when(on());
+    [
         Parameter::toggle("gobo", "Gobo", false)
             .group(GOBO)
             .help("Masks the light with dappled shade, as if through leaves"),
@@ -60,6 +62,8 @@ fn gobo_params() -> Vec<Parameter> {
             .group(GOBO),
         ),
     ]
+    .into_iter()
+    .fold(Schema::default().section(section), Schema::parameter)
 }
 
 /// The rim light's type: Side, then the standard emission settings, a warm
@@ -80,19 +84,20 @@ fn rim_light() -> PrimType {
         }
         d
     });
-    PrimType::new(RIM_LIGHT, "Rim Light", Role::Light).group(
-        Section::new(standard::LIGHT_GROUP, "Light", true),
-        [side].into_iter().chain(emission).collect(),
-    )
+    let light = Schema::default().section(Section::new(standard::LIGHT_GROUP, "Light", true));
+    let schema = [side]
+        .into_iter()
+        .chain(emission)
+        .fold(light, Schema::parameter);
+    PrimType::new(RIM_LIGHT, "Rim Light", Role::Light, schema)
 }
 
 /// Pixel's light types, in the order menus list them: the standard ones (a
 /// Gobo on distant lights and spots), then the rim light.
 pub fn light_types() -> Vec<PrimType> {
-    let gobo = || Section::new(GOBO, "Gobo", false).open_when(Condition::when("gobo", true));
     (standard::lights().into_iter())
         .map(|ty| match ty.id {
-            standard::DISTANT_LIGHT | standard::SPOT_LIGHT => ty.group(gobo(), gobo_params()),
+            standard::DISTANT_LIGHT | standard::SPOT_LIGHT => ty.merged(gobo_section()),
             _ => ty,
         })
         .chain([rim_light()])
@@ -147,7 +152,7 @@ mod tests {
     use super::*;
 
     fn declared(ty: &PrimType, values: &[(&str, Value)]) -> Declared {
-        let mut prim = Declared::new(ty.id, ty.defaults());
+        let mut prim = Declared::new(ty.id, ty.schema().values());
         for (name, v) in values {
             prim.values.insert((*name).to_owned(), v.clone());
         }
@@ -168,7 +173,7 @@ mod tests {
                 RIM_LIGHT
             ]
         );
-        let gobo_of = |t: &PrimType| t.params.iter().any(|d| &*d.name == "goboScale");
+        let gobo_of = |t: &PrimType| t.schema().parameters().any(|d| &*d.name == "goboScale");
         assert_eq!(
             types.iter().map(gobo_of).collect::<Vec<_>>(),
             [false, false, true, true, false]
