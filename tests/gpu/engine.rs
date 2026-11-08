@@ -344,6 +344,37 @@ fn a_preview_is_a_swatch_of_the_material() {
     );
 }
 
+/// A preview that can't render (a swatch past the device's textures) fails
+/// saying why, and the next one renders as its own.
+#[test]
+#[ignore = "gpu"]
+fn a_failed_preview_leaves_the_next_one_be() {
+    let (mut engine, _display, waiter, _device) = pixel();
+    let Some(kinogaki_render_api::Prim::Material(red)) = Some(surface([0.8, 0.1, 0.1])) else {
+        unreachable!()
+    };
+    let request = |side| PreviewRequest {
+        network: red.network.clone(),
+        textures: Vec::new(),
+        shape: PreviewShape::Sphere,
+        lighting: PreviewLighting::Studio,
+        side,
+    };
+    let huge = engine.preview(request(1 << 14));
+    let mut failed = None;
+    waiter.until(LIMIT, || {
+        failed = huge.take();
+        failed.is_some()
+    });
+    let why = failed
+        .expect("taken")
+        .expect_err("a swatch past the device's textures");
+    assert!(why.message().contains("textures hold"), "{}", why.message());
+    let picture = waiter.take(&engine.preview(request(64)), LIMIT);
+    let middle = picture.read_pixel(0, 32, 32);
+    assert!(middle[0] > middle[1] * 2.0, "red: {middle:?}");
+}
+
 #[test]
 #[ignore = "gpu"]
 fn a_compositor_reads_the_film_and_the_outputs_it_keeps() {

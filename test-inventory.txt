@@ -8,6 +8,7 @@ kinogaki-pixel/gpu gpu engine::a_change_renders_one_frame_and_rest_renders_none
 kinogaki-pixel/gpu gpu engine::a_compositor_reads_the_film_and_the_outputs_it_keeps
 kinogaki-pixel/gpu gpu engine::a_deformed_shape_renders_where_its_points_moved
 kinogaki-pixel/gpu gpu engine::a_dropped_views_kept_outputs_go_with_it
+kinogaki-pixel/gpu gpu engine::a_failed_preview_leaves_the_next_one_be
 kinogaki-pixel/gpu gpu engine::a_final_read_through_a_camera_gone_fails
 kinogaki-pixel/gpu gpu engine::a_new_color_renders_again_and_views_share_the_scene
 kinogaki-pixel/gpu gpu engine::a_preview_is_a_swatch_of_the_material

@@ -25,20 +25,29 @@ struct View {
     desc: ViewDesc,
     settings: Settings,
     viewport: Viewport,
-    /// Which edit of the view the next frame shows.
+    /// Which edit of the view its frames show (every edit makes it `Due`).
     generation: u64,
-    /// The edit its viewport's film shows, once one rendered: what a read
-    /// answers with only while it is still the view's.
-    filmed: Option<u64>,
+    /// Where its frame of its newest edit stands.
+    frame: Frame,
     /// How often the host had dropped its id when it gave it.
     drops: u64,
-    /// It needs a frame.
-    dirty: bool,
-    /// Why it couldn't render its newest edit: what its reads fail with.
-    failed: Option<String>,
     paused: bool,
     /// The outputs its images keep beside the beauty.
     kept: Vec<Output>,
+}
+
+/// Where a view's frame of its newest edit stands: what renders it and what
+/// a read of it answers.
+#[derive(Clone, Debug, PartialEq)]
+enum Frame {
+    /// It waits for a frame: reads wait.
+    Due,
+    /// Its film shows it: reads take their outputs from the film.
+    Shown,
+    /// Its film has no pixels: nothing to render, and nothing to read.
+    Empty,
+    /// It couldn't render: why, which its reads fail with.
+    Failed(String),
 }
 
 /// The render thread's state.
@@ -127,13 +136,11 @@ impl Worker {
         let renders = (self.views.iter()).any(|(id, v)| {
             let newest = published.latest(*id);
             let free = (shared.rings.get(id)).is_none_or(|r| r.free(newest).is_some());
-            v.dirty && !v.paused && free
+            v.frame == Frame::Due && !v.paused && free
         });
         renders
-            || self
-                .readings
-                .iter()
-                .any(|(id, _)| self.views.get(id).is_none_or(|v| !v.dirty))
+            || (self.readings.iter())
+                .any(|(id, _)| self.views.get(id).is_none_or(|v| v.frame != Frame::Due))
     }
 
     /// Takes `message`; false to stop.
@@ -152,10 +159,15 @@ impl Worker {
             }
             Message::Focus(id) => self.focused = Some(id),
             Message::Read(id, reading) => self.readings.push((id, reading)),
+            Message::Preview(update, desc, reading) => {
+                self.queue(update);
+                self.set_view(PREVIEW, desc, 0);
+                self.readings.push((PREVIEW, reading));
+            }
             Message::Engine(Own::Keep(id, kept)) => {
                 if let Some(v) = self.views.get_mut(&id) {
                     v.kept = kept;
-                    v.dirty = true;
+                    v.frame = Frame::Due;
                 }
             }
             Message::Freed => {}
@@ -180,8 +192,8 @@ impl Worker {
                 view.desc = desc;
                 view.settings = settings;
                 view.generation += 1;
+                view.frame = Frame::Due;
                 view.drops = drops;
-                view.dirty = true;
             }
             None => {
                 let viewport = self.renderer.viewport();
@@ -191,10 +203,8 @@ impl Worker {
                     settings,
                     viewport,
                     generation: 0,
-                    filmed: None,
+                    frame: Frame::Due,
                     drops,
-                    dirty: true,
-                    failed: None,
                     paused: false,
                     kept: shared.kept.get(&id).cloned().unwrap_or_default(),
                 };
@@ -235,7 +245,7 @@ impl Worker {
             view.settings.up = up;
             if changed.any() || refit || sync.camera(&view.desc.camera) != cameras[id] {
                 view.generation += 1;
-                view.dirty = true;
+                view.frame = Frame::Due;
             }
         }
     }
@@ -251,7 +261,7 @@ impl Worker {
             order.insert(0, focused);
         }
         for id in order {
-            if self.views.get(&id).is_some_and(|v| v.dirty && !v.paused) {
+            if (self.views.get(&id)).is_some_and(|v| v.frame == Frame::Due && !v.paused) {
                 self.render_view(id);
             }
         }
@@ -263,8 +273,7 @@ impl Worker {
         let Some(view) = self.views.get_mut(&id) else {
             return;
         };
-        view.dirty = false;
-        view.failed = Some(why.clone());
+        view.frame = Frame::Failed(why.clone());
         if lock(&self.published).fail(id, Diagnostic::error(why), view.drops) {
             (self.wake)();
         }
@@ -316,7 +325,7 @@ impl Worker {
             Err(why) => return self.fail(id, why),
         };
         if film.is_empty() {
-            self.views.get_mut(&id).expect("a view").dirty = false;
+            self.views.get_mut(&id).expect("a view").frame = Frame::Empty;
             return;
         }
         let device = self.renderer.device().clone();
@@ -340,22 +349,23 @@ impl Worker {
         let lost = polled
             .map(drop)
             .map_err(|e| format!("the GPU was lost: {e}"));
-        view.dirty = false;
-        view.filmed = rendered.is_some().then_some(view.generation);
+        view.frame = match rendered {
+            Some(_) => Frame::Shown,
+            None => Frame::Empty,
+        };
         let refused = caught.end().and(lost).err();
-        if rendered.is_none() || id == PREVIEW || refused.is_some() {
+        // A preview's frame is read, not shown.
+        if view.frame != Frame::Shown || id == PREVIEW || refused.is_some() {
             let mut shared = lock(&self.shared);
             if let Some(ring) = shared.rings.get_mut(&id) {
                 ring.holds[at] = None;
             }
             drop(shared);
             if let Some(why) = refused {
-                view.filmed = None;
                 self.fail(id, why);
             }
             return;
         }
-        view.failed = None;
         let image = match self.read_pixels {
             true => ViewPass::pixels(
                 size,
@@ -398,20 +408,18 @@ impl Worker {
             let Some(view) = self.views.get(&id) else {
                 continue;
             };
-            if view.dirty {
-                self.readings.push((id, reading));
-                continue;
-            }
-            if let Some(why) = &view.failed {
-                reading.fail(Error::invalid(why.clone()));
-                continue;
-            }
-            // Its film only while it shows the view's newest edit: a view
-            // that couldn't render it (its camera gone) has none.
-            let newest = view.filmed == Some(view.generation);
-            let targets = newest
-                .then(|| self.renderer.targets(&view.viewport))
-                .flatten();
+            let targets = match &view.frame {
+                Frame::Due => {
+                    self.readings.push((id, reading));
+                    continue;
+                }
+                Frame::Failed(why) => {
+                    reading.fail(Error::invalid(why.clone()));
+                    continue;
+                }
+                Frame::Shown => self.renderer.targets(&view.viewport),
+                Frame::Empty => None,
+            };
             answer(
                 reading,
                 &self.renderer,
