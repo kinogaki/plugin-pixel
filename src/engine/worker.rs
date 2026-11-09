@@ -1,6 +1,10 @@
 //! The render thread: it applies the scene's updates, renders each view that
 //! needs a frame into a free display image, publishes it once the GPU has
 //! finished it, and answers final reads and previews.
+//!
+//! A reading is its view's, kept with it until answered: one of a view the
+//! host hasn't given fails at once, and a dropped view's go with it
+//! unanswered (they resolve as cancelled), as the SDK's `finish` says.
 use super::display::{IMAGES, Ring, Shared, image_key};
 use super::lock;
 use super::readings::answer;
@@ -34,6 +38,8 @@ struct View {
     paused: bool,
     /// The outputs its images keep beside the beauty.
     kept: Vec<Output>,
+    /// The readings waiting for its frame of its newest edit.
+    readings: Vec<Reading>,
 }
 
 impl View {
@@ -42,6 +48,31 @@ impl View {
     fn edit(&mut self) {
         self.generation += 1;
         self.frame = Frame::Due;
+    }
+
+    /// Its readings answered from `renderer` once its frame of its newest
+    /// edit is done; those no one wants let go.
+    fn answer_readings(&mut self, renderer: &Renderer) {
+        self.readings.retain(Reading::wanted);
+        let targets = match &self.frame {
+            Frame::Due => return,
+            Frame::Failed(why) => {
+                let why = Error::invalid(why.clone());
+                self.readings.drain(..).for_each(|r| r.fail(why.clone()));
+                return;
+            }
+            Frame::Shown => renderer.targets(&self.viewport),
+            Frame::Empty => None,
+        };
+        for reading in self.readings.drain(..) {
+            answer(
+                reading,
+                renderer,
+                targets,
+                &self.desc,
+                self.settings.pixel_size,
+            );
+        }
     }
 }
 
@@ -73,7 +104,6 @@ pub(super) struct Worker {
     pending: Option<SceneUpdate>,
     views: BTreeMap<ViewId, View>,
     focused: Option<ViewId>,
-    readings: Vec<(ViewId, Reading)>,
     /// Display image sets made so far.
     sets: u64,
     /// What the scene can't render as sent, as said last: each is said
@@ -99,7 +129,6 @@ impl Worker {
             pending: None,
             views: BTreeMap::new(),
             focused: None,
-            readings: Vec::new(),
             sets: 0,
             said: Vec::new(),
         }
@@ -130,22 +159,20 @@ impl Worker {
             }
             self.apply();
             self.render();
-            self.read();
+            self.serve_readings();
         }
     }
 
     /// Whether something can be done without a message: a view to render
-    /// into a free image, or a read whose frame is done.
+    /// into a free image, or a view's readings whose frame is done.
     fn has_work(&self) -> bool {
         let (shared, published) = (lock(&self.shared), lock(&self.published));
-        let renders = (self.views.iter()).any(|(id, v)| {
+        (self.views.iter()).any(|(id, v)| {
             let newest = published.latest(*id);
             let free = (shared.rings.get(id)).is_none_or(|r| r.free(newest).is_some());
-            v.frame == Frame::Due && !v.paused && free
-        });
-        renders
-            || (self.readings.iter())
-                .any(|(id, _)| self.views.get(id).is_none_or(|v| v.frame != Frame::Due))
+            let renders = v.frame == Frame::Due && !v.paused && free;
+            renders || (!v.readings.is_empty() && v.frame != Frame::Due)
+        })
     }
 
     /// Takes `message`; false to stop.
@@ -153,21 +180,18 @@ impl Worker {
         match message {
             Message::Update(update) => self.queue(update),
             Message::View(id, desc, drops) => self.set_view(id, desc, drops),
-            Message::Drop(id) => {
-                self.views.remove(&id);
-                lock(&self.shared).rings.remove(&id);
-            }
+            Message::Drop(id) => self.drop_view(id),
             Message::Pause(id, paused) => {
                 if let Some(v) = self.views.get_mut(&id) {
                     v.paused = paused;
                 }
             }
             Message::Focus(id) => self.focused = Some(id),
-            Message::Read(id, reading) => self.readings.push((id, reading)),
+            Message::Read(id, reading) => self.read(id, reading),
             Message::Preview(update, desc, reading) => {
                 self.queue(update);
                 self.set_view(PREVIEW, desc, 0);
-                self.readings.push((PREVIEW, reading));
+                self.read(PREVIEW, reading);
             }
             Message::Engine(Own::Keep(id, kept)) => {
                 if let Some(v) = self.views.get_mut(&id) {
@@ -179,6 +203,22 @@ impl Worker {
             Message::Stop => return false,
         }
         true
+    }
+
+    /// `reading` of view `id`, answered once its frame of its newest edit is
+    /// done; with no such view, it fails at once.
+    fn read(&mut self, id: ViewId, reading: Reading) {
+        match self.views.get_mut(&id) {
+            Some(view) => view.readings.push(reading),
+            None => reading.fail(Error::invalid(format!("no view {}", id.0))),
+        }
+    }
+
+    /// View `id` goes, at once, with its display images: its readings go
+    /// with it unanswered (they resolve as cancelled).
+    fn drop_view(&mut self, id: ViewId) {
+        self.views.remove(&id);
+        lock(&self.shared).rings.remove(&id);
     }
 
     fn queue(&mut self, update: SceneUpdate) {
@@ -211,6 +251,7 @@ impl Worker {
                     drops,
                     paused: false,
                     kept: shared.kept.get(&id).cloned().unwrap_or_default(),
+                    readings: Vec::new(),
                 };
                 drop(shared);
                 self.views.insert(id, view);
@@ -402,36 +443,10 @@ impl Worker {
         }
     }
 
-    /// Answers each read whose view's newest frame is done; drops those no
-    /// one wants, and those of views gone.
-    fn read(&mut self) {
-        let readings = std::mem::take(&mut self.readings);
-        for (id, reading) in readings {
-            if !reading.wanted() {
-                continue;
-            }
-            let Some(view) = self.views.get(&id) else {
-                continue;
-            };
-            let targets = match &view.frame {
-                Frame::Due => {
-                    self.readings.push((id, reading));
-                    continue;
-                }
-                Frame::Failed(why) => {
-                    reading.fail(Error::invalid(why.clone()));
-                    continue;
-                }
-                Frame::Shown => self.renderer.targets(&view.viewport),
-                Frame::Empty => None,
-            };
-            answer(
-                reading,
-                &self.renderer,
-                targets,
-                &view.desc,
-                view.settings.pixel_size,
-            );
-        }
+    /// Answers each view's readings whose frame is done; lets go of those
+    /// no one wants.
+    fn serve_readings(&mut self) {
+        let renderer = &self.renderer;
+        (self.views.values_mut()).for_each(|view| view.answer_readings(renderer));
     }
 }

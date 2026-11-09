@@ -15,6 +15,8 @@
 //! [`SceneUpdate::merge`]: kinogaki_render_api::SceneUpdate::merge
 mod display;
 mod readings;
+#[cfg(test)]
+mod tests;
 mod worker;
 
 pub use display::PixelDisplay;
