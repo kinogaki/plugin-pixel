@@ -36,6 +36,15 @@ struct View {
     kept: Vec<Output>,
 }
 
+impl View {
+    /// It was edited: its next frame shows the edit (a new generation), and
+    /// its reads wait for that frame.
+    fn edit(&mut self) {
+        self.generation += 1;
+        self.frame = Frame::Due;
+    }
+}
+
 /// Where a view's frame of its newest edit stands: what renders it and what
 /// a read of it answers.
 #[derive(Clone, Debug, PartialEq)]
@@ -70,9 +79,6 @@ pub(super) struct Worker {
     /// What the scene can't render as sent, as said last: each is said
     /// once while it stands.
     said: Vec<Diagnostic>,
-    /// Why the scene doesn't fit the device: every view fails with it until
-    /// a scene does.
-    unfit: Option<String>,
 }
 
 impl Worker {
@@ -96,7 +102,6 @@ impl Worker {
             readings: Vec::new(),
             sets: 0,
             said: Vec::new(),
-            unfit: None,
         }
     }
 
@@ -167,7 +172,7 @@ impl Worker {
             Message::Engine(Own::Keep(id, kept)) => {
                 if let Some(v) = self.views.get_mut(&id) {
                     v.kept = kept;
-                    v.frame = Frame::Due;
+                    v.edit();
                 }
             }
             Message::Freed => {}
@@ -191,9 +196,8 @@ impl Worker {
             Some(view) => {
                 view.desc = desc;
                 view.settings = settings;
-                view.generation += 1;
-                view.frame = Frame::Due;
                 view.drops = drops;
+                view.edit();
             }
             None => {
                 let viewport = self.renderer.viewport();
@@ -225,9 +229,9 @@ impl Worker {
             .map(|(id, view)| (*id, self.sync.camera(&view.desc.camera)))
             .collect();
         let changed = self.sync.apply(update);
-        let unfit = self.renderer.set_scene(self.sync.scene(), changed).err();
-        let refit = unfit != self.unfit;
-        self.unfit = unfit;
+        let unfit = self.renderer.unfit().map(str::to_owned);
+        let set = self.renderer.set_scene(self.sync.scene(), changed);
+        let refit = set.err() != unfit;
         let problems = self.sync.problems();
         let new: Vec<Diagnostic> = (problems.iter())
             .filter(|p| !self.said.contains(p))
@@ -244,8 +248,7 @@ impl Worker {
         for (id, view) in &mut self.views {
             view.settings.up = up;
             if changed.any() || refit || sync.camera(&view.desc.camera) != cameras[id] {
-                view.generation += 1;
-                view.frame = Frame::Due;
+                view.edit();
             }
         }
     }
@@ -315,8 +318,8 @@ impl Worker {
         };
         let size = [view.desc.width, view.desc.height];
         let film = Film::new(size[0], size[1], view.settings.pixel_size);
-        let camera = match (&self.unfit, self.sync.camera(&view.desc.camera)) {
-            (Some(unfit), _) => Err(unfit.clone()),
+        let camera = match (self.renderer.unfit(), self.sync.camera(&view.desc.camera)) {
+            (Some(unfit), _) => Err(unfit.to_owned()),
             (None, None) => Err("the view's camera isn't in the scene".to_owned()),
             (None, Some(camera)) => self.renderer.fits(&film).map(|()| camera),
         };
@@ -349,23 +352,25 @@ impl Worker {
         let lost = polled
             .map(drop)
             .map_err(|e| format!("the GPU was lost: {e}"));
-        view.frame = match rendered {
-            Some(_) => Frame::Shown,
-            None => Frame::Empty,
+        let frame = match (caught.end().and(lost).err(), rendered) {
+            (Some(why), _) => Frame::Failed(why),
+            (None, Some(_)) => Frame::Shown,
+            (None, None) => Frame::Empty,
         };
-        let refused = caught.end().and(lost).err();
-        // A preview's frame is read, not shown.
-        if view.frame != Frame::Shown || id == PREVIEW || refused.is_some() {
+        // Only a shown frame is published, and a preview's is read, not
+        // shown: no image holds the others.
+        if frame != Frame::Shown || id == PREVIEW {
             let mut shared = lock(&self.shared);
             if let Some(ring) = shared.rings.get_mut(&id) {
                 ring.holds[at] = None;
             }
             drop(shared);
-            if let Some(why) = refused {
-                self.fail(id, why);
-            }
-            return;
+            return match frame {
+                Frame::Failed(why) => self.fail(id, why),
+                frame => view.frame = frame,
+            };
         }
+        view.frame = Frame::Shown;
         let image = match self.read_pixels {
             true => ViewPass::pixels(
                 size,

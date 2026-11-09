@@ -83,9 +83,9 @@ pub struct Renderer {
     ambient: crate::render::Ambient,
     rims: crate::render::Rims,
     fog: Option<crate::render::Fog>,
-    /// The last scene didn't fit: the GPU holds an older one, which the
-    /// next replaces whole.
-    unfit: bool,
+    /// Why the last scene didn't fit the device: the GPU holds an older one,
+    /// which the next replaces whole.
+    unfit: Option<String>,
 }
 
 /// One view's frame: its uniform, its film textures and its bind groups.
@@ -107,7 +107,7 @@ impl Renderer {
             ambient: Default::default(),
             rims: Default::default(),
             fog: None,
-            unfit: false,
+            unfit: None,
         }
     }
 
@@ -124,13 +124,22 @@ impl Renderer {
     /// Takes `scene`, uploading what `changed` says (all of it after a scene
     /// that didn't fit); why not, when it doesn't fit the device.
     pub fn set_scene(&mut self, scene: &Scene, changed: Changed) -> Result<(), String> {
-        let changed = if self.unfit { Changed::ALL } else { changed };
+        let changed = if self.unfit.is_some() {
+            Changed::ALL
+        } else {
+            changed
+        };
         let caught = Caught::on(&self.device);
         let set = self.scene.set((&self.device, &self.queue), scene, changed);
         let set = caught.end().and(set);
-        self.unfit = set.is_err();
+        self.unfit = set.clone().err();
         (self.ambient, self.rims, self.fog) = (scene.ambient, scene.rims, scene.fog);
         set
+    }
+
+    /// Why the last scene didn't fit the device, while it doesn't.
+    pub fn unfit(&self) -> Option<&str> {
+        self.unfit.as_deref()
     }
 
     /// How many times the meshes were laid out whole: a mesh made again
