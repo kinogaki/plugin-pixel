@@ -141,12 +141,7 @@ impl Passes {
             ambient: Kernel::new(
                 device,
                 "pixel ambient",
-                &[
-                    part::SURFACE,
-                    part::BVH,
-                    part::HEMISPHERE,
-                    include_str!("shaders/ambient.wgsl"),
-                ],
+                &source(include_str!("shaders/ambient.wgsl"), &[part::HEMISPHERE]),
                 &with(&[written(4, COLOR), written(5, SCALAR)]),
                 Some(scene),
             ),

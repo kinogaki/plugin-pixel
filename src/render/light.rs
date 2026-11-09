@@ -25,6 +25,9 @@ pub struct Light {
     pub shaping: Option<Shaping>,
     /// ShadowAPI's shadows.
     pub shadow: Shadow,
+    /// Its slot among the geometry lights (`crate::shadowless`;
+    /// `shadowless::NO_SLOT`: every instance casts its shadows).
+    pub slot: u32,
 }
 
 impl Light {

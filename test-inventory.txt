@@ -26,6 +26,8 @@ kinogaki-pixel/gpu gpu limits::a_scene_past_the_devices_buffers_fails_its_views_
 kinogaki-pixel/gpu gpu limits::as_many_triangles_placed_as_copies_of_one_render
 kinogaki-pixel/gpu gpu limits::lit_fog_over_no_surface_renders
 kinogaki-pixel/gpu gpu moves::a_deform_writes_its_mesh_in_place
+kinogaki-pixel/gpu gpu portals::a_geometry_light_lights_as_a_sphere_of_its_mesh_and_its_mesh_casts_no_shadow
+kinogaki-pixel/gpu gpu portals::a_portal_lets_its_domes_ambient_through_alone
 kinogaki-pixel/gpu gpu textures::a_gltf_texture_rotates_as_its_graph_places_it
 kinogaki-pixel/gpu gpu textures::each_axis_wraps_as_its_node_says
 kinogaki-pixel/gpu gpu textures::each_texel_shows_where_its_coordinates_put_it_and_a_cutout_shows_nothing

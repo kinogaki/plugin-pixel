@@ -6,5 +6,6 @@ mod engine;
 mod lights;
 mod limits;
 mod moves;
+mod portals;
 mod support;
 mod textures;

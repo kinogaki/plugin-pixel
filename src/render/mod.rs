@@ -38,6 +38,8 @@ pub struct Scene {
     pub glows: Vec<Glow>,
     /// The domes' light.
     pub ambient: Ambient,
+    /// The portals domes light through.
+    pub portals: Vec<Portal>,
     /// The rim lights' light.
     pub rims: Rims,
     /// The height fog, when there is one.
@@ -148,6 +150,9 @@ pub struct Instance {
     /// What stands for its mesh's corners' alpha, likewise: its instance's
     /// own value of the alpha attribute its material reads.
     pub alpha: Option<f32>,
+    /// The slots of the geometry lights it casts no shadow of
+    /// (`crate::shadowless`), 32 a word.
+    pub shadowless: [u32; 4],
 }
 
 /// A Pixel Surface as a frame shades it.
@@ -232,15 +237,34 @@ pub struct Medium {
 }
 
 /// The domes' light: their radiance from above and from below the horizon,
-/// summed, and whether the camera sees them behind the scene.
+/// summed, those lighting through portals apart, and whether the camera
+/// sees the others behind the scene.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Ambient {
     /// From above.
     pub sky: [f32; 3],
     /// From below (a dome's ground color).
     pub ground: [f32; 3],
-    /// The camera sees them.
+    /// From above, through portals ([`Scene::portals`]).
+    pub through_sky: [f32; 3],
+    /// From below, through portals.
+    pub through_ground: [f32; 3],
+    /// The camera sees the domes lighting without portals.
     pub seen: bool,
+}
+
+/// A portal domes light through (ambient.wgsl): its centre, half extents
+/// and the way its light passes (its -Z), in the world.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Portal {
+    /// Its centre.
+    pub centre: [f32; 3],
+    /// Half its width along its X.
+    pub u: [f32; 3],
+    /// Half its height along its Y.
+    pub v: [f32; 3],
+    /// The way its light passes, unit.
+    pub passes: [f32; 3],
 }
 
 /// The rim lights' light, summed by where it shows.

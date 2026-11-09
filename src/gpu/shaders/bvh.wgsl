@@ -221,9 +221,10 @@ fn mesh_transmittance(k: u32, r: Ray, t_max: f32, kept: vec3<f32>) -> vec3<f32> 
 
 // What gets through along `o + t·d` with 0 < t < t_max: the product of
 // the transmittances of the triangles there (a thin translucent surface
-// lets translucency × translucency color through; an opaque one nothing).
-// The order of the hits does not matter, so no sorting.
-fn transmittance(o: vec3<f32>, d: vec3<f32>, t_max: f32) -> vec3<f32> {
+// lets translucency × translucency color through; an opaque one nothing),
+// of the instances casting the shadows of the light of slot `slot`. The
+// order of the hits does not matter, so no sorting.
+fn transmittance(o: vec3<f32>, d: vec3<f32>, t_max: f32, slot: u32) -> vec3<f32> {
     let r = ray(o, d);
     var through = vec3<f32>(1.0);
     var stack: array<u32, STACK>;
@@ -242,6 +243,9 @@ fn transmittance(o: vec3<f32>, d: vec3<f32>, t_max: f32) -> vec3<f32> {
             continue;
         }
         for (var k = n.a; k < n.a + n.count; k++) {
+            if !casts_for(instances[k], slot) {
+                continue;
+            }
             through = mesh_transmittance(k, into(instances[k], r), t_max, through);
             if max(max(through.x, through.y), through.z) < OPAQUE {
                 return vec3<f32>(0.0);
@@ -300,8 +304,9 @@ fn mesh_closest(k: u32, r: Ray, hit: Hit) -> Hit {
     return best;
 }
 
-// The closest triangle along `o + t·d` with 0 < t < t_max.
-fn closest(o: vec3<f32>, d: vec3<f32>, t_max: f32) -> Hit {
+// The closest triangle along `o + t·d` with 0 < t < t_max, of the
+// instances casting the shadows of the light of slot `slot` (NO_SLOT: any).
+fn closest(o: vec3<f32>, d: vec3<f32>, t_max: f32, slot: u32) -> Hit {
     let r = ray(o, d);
     var hit = Hit(t_max, 0u, 0u);
     var stack: array<u32, STACK>;
@@ -320,7 +325,9 @@ fn closest(o: vec3<f32>, d: vec3<f32>, t_max: f32) -> Hit {
             continue;
         }
         for (var k = n.a; k < n.a + n.count; k++) {
-            hit = mesh_closest(k, into(instances[k], r), hit);
+            if casts_for(instances[k], slot) {
+                hit = mesh_closest(k, into(instances[k], r), hit);
+            }
         }
     }
     return hit;

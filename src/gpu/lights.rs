@@ -17,7 +17,7 @@
 //! focus toward its tint, an IES profile read at [`PROFILE`] vertical
 //! angles) and shadowed as ShadowAPI says.
 use crate::render::vector::V3;
-use crate::render::{Light, LightShape, PROFILE};
+use crate::render::{Light, LightShape, PROFILE, Portal};
 use bytemuck::{Pod, Zeroable};
 use std::f32::consts::PI;
 
@@ -29,6 +29,10 @@ pub const DISTANT: f32 = 1.0;
 pub const SPHERE: f32 = 2.0;
 /// A cylinder (or line).
 pub const CYLINDER: f32 = 3.0;
+/// A portal domes light through (after the lights: ambient.wgsl reads
+/// position, normal (the way its light passes), axis and power (its half
+/// extents)).
+pub const PORTAL: f32 = 4.0;
 
 /// A light as the passes read it (`Light` in light.wgsl).
 #[repr(C)]
@@ -60,7 +64,8 @@ pub struct GpuLight {
     pub gobo_x: [f32; 4],
     /// The light's Y over the scale, w the offset's y over it.
     pub gobo_y: [f32; 4],
-    /// x: the gobo's seed.
+    /// x: the gobo's seed; y: its slot among the geometry lights
+    /// (`crate::shadowless`).
     pub seed: [u32; 4],
 }
 
@@ -141,7 +146,19 @@ impl GpuLight {
             packed.gobo_y = unit(y).with_w(g.offset[1] / s);
             packed.seed[0] = g.seed;
         }
+        packed.seed[1] = light.slot;
         packed
+    }
+
+    /// `portal` as the ambient pass reads it.
+    pub fn portal(portal: &Portal) -> GpuLight {
+        GpuLight {
+            position: V3::of(portal.centre).with_w(0.0),
+            normal: V3::of(portal.passes).with_w(PORTAL),
+            axis: V3::of(portal.u).with_w(0.0),
+            power: V3::of(portal.v).with_w(0.0),
+            ..GpuLight::default()
+        }
     }
 }
 
@@ -165,6 +182,7 @@ mod tests {
             gobo: None,
             shaping: None,
             shadow: Shadow::default(),
+            slot: crate::shadowless::NO_SLOT,
         }
     }
 

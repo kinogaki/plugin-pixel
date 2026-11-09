@@ -147,6 +147,7 @@ impl Drawn<'_> {
                 id: 0,
                 tint: None,
                 alpha: None,
+                shadowless: [0; 4],
             });
         }
         Drawn {
@@ -332,6 +333,8 @@ pub struct GpuScene {
     pub volumes: (u32, u32),
     /// Lights in the light buffer.
     pub lights: u32,
+    /// Portals in the light buffer, after the lights.
+    pub portals: u32,
     /// How many times the meshes were laid out whole (tests and counters).
     pub layouts: u64,
 }
@@ -382,6 +385,7 @@ impl GpuScene {
             instances,
             volumes: (0, 0),
             lights: 0,
+            portals: 0,
             layouts: 0,
         };
         made.lay_out(device);
@@ -415,9 +419,12 @@ impl GpuScene {
             )
         });
         let media = changed.volumes.then(|| Media::build(&scene.volumes));
-        let lights = changed
-            .lights
-            .then(|| scene.lights.iter().map(GpuLight::of).collect::<Vec<_>>());
+        // The lights, then the portals domes light through.
+        let lights = changed.lights.then(|| {
+            (scene.lights.iter().map(GpuLight::of))
+                .chain(scene.portals.iter().map(GpuLight::portal))
+                .collect::<Vec<_>>()
+        });
         let parts: Vec<Part> = (meshes.iter().flat_map(Meshes::parts))
             .chain(instances.iter().flat_map(Instances::parts))
             .chain(media.iter().flat_map(Media::parts))
@@ -471,7 +478,8 @@ impl GpuScene {
         }
         if let Some(lights) = lights {
             self.buffers[LIGHTS] = buffer(device, "pixel lights", &lights, STORAGE);
-            self.lights = lights.len() as u32;
+            self.lights = scene.lights.len() as u32;
+            self.portals = scene.portals.len() as u32;
         }
         if changed.any() {
             self.group = Self::bind(device, &self.layout, &self.buffers, &self.texels);
@@ -552,6 +560,7 @@ mod tests {
             id: 7,
             tint: None,
             alpha: None,
+            shadowless: [0; 4],
         }
     }
 

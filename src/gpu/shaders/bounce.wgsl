@@ -17,7 +17,7 @@
 // at the end); 0 when it hits nothing. `depth` is the origin's, for the
 // hit's ray offset.
 fn bounce(origin: vec3<f32>, d: vec3<f32>, depth: f32) -> vec3<f32> {
-    let hit = closest(origin, d, frame.gi.y);
+    let hit = closest(origin, d, frame.gi.y, NO_SLOT);
     if hit.t >= frame.gi.y {
         return vec3<f32>(0.0);
     }

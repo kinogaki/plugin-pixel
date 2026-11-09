@@ -171,7 +171,7 @@ fn shadowed(l: Light, origin: vec3<f32>, wi: vec3<f32>, reach: f32) -> vec3<f32>
     if limit > 0.0 {
         far = min(reach, limit);
     }
-    let hit = closest(origin, wi, far);
+    let hit = closest(origin, wi, far, l.seed.y);
     if hit.t >= far {
         return vec3<f32>(1.0);
     }
@@ -190,7 +190,7 @@ fn unshadowed(l: Light, origin: vec3<f32>, wi: vec3<f32>, reach: f32) -> vec3<f3
     if shadow_shaped(l) {
         return shadowed(l, origin, wi, reach);
     }
-    return transmittance(origin, wi, reach);
+    return transmittance(origin, wi, reach, l.seed.y);
 }
 
 // The irradiance at `surface` (unit normal `n`, the side seen), shadowed:

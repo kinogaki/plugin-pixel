@@ -22,18 +22,18 @@ use std::f32::consts::PI;
 use std::sync::Arc;
 
 /// The view's side, in pixels.
-const SIDE: u32 = 24;
+pub(super) const SIDE: u32 = 24;
 
 /// The pixel over (0.5, 0.5), below each light; the one over (4.5, 0.5), 45°
 /// off the axis of a light 4 above.
-const BELOW: (u32, u32) = (12, 12);
+pub(super) const BELOW: (u32, u32) = (12, 12);
 const OFF: (u32, u32) = (16, 12);
 
 /// How high the lights hang above the floor.
 const HIGH: f32 = 4.0;
 
 /// Looking straight down from `at`, -Z the image's top.
-fn down(at: Vec3) -> Xform {
+pub(super) fn down(at: Vec3) -> Xform {
     Xform::from_axes(Vec3::X, -Vec3::Z, Vec3::Y, at)
 }
 
@@ -91,7 +91,7 @@ fn prim(light: &Light, images: &[(&str, u32)]) -> Prim {
 
 /// What a view of `prims` over a floor (and a slab 1 up when `slab`) shows
 /// at `pixels` in `output`, the camera `height` up.
-fn shown(
+pub(super) fn shown(
     prims: Vec<Prim>,
     slab: bool,
     height: f32,

@@ -17,6 +17,10 @@ struct Frame {
     // rgb: the domes' radiance from below it (the ground colors'); w: 1
     // when the camera sees the domes behind the scene.
     ground: vec4<f32>,
+    // rgb: the radiance from above of the domes lighting through portals.
+    through: vec4<f32>,
+    // rgb: theirs from below.
+    through_ground: vec4<f32>,
     // xyz: the world's up, unit.
     world_up: vec4<f32>,
     // Film width, height, pixel size, light count.
@@ -33,7 +37,8 @@ struct Frame {
     fog_color: vec4<f32>,
     // The fog's start, height, falloff and (lit) anisotropy.
     fog: vec4<f32>,
-    // AO's strength, power and share on direct light; unused.
+    // AO's strength, power and share on direct light; the portals after
+    // the lights in the light buffer.
     ao: vec4<f32>,
     // GI's strength, distance and samples; unused.
     gi: vec4<f32>,
@@ -85,6 +90,20 @@ struct Instance {
     // What stands for its mesh's corners' tint (rgb) and alpha (w): its
     // instance's own, where `id.z` says it holds them.
     tint: vec4<f32>,
+    // The slots of the geometry lights it casts no shadow of, 32 a word
+    // (shadowless.rs).
+    shadowless: vec4<u32>,
+}
+
+// The slot of a light whose shadows every instance casts (shadowless.rs).
+const NO_SLOT: u32 = 0xffffffffu;
+
+// Whether instance `object` casts the shadows of the light of slot `slot`.
+fn casts_for(object: Instance, slot: u32) -> bool {
+    if slot >= 128u {
+        return true;
+    }
+    return ((object.shadowless[slot / 32u] >> (slot % 32u)) & 1u) == 0u;
 }
 
 // The tint and alpha of `object` where its corners' are `corners`: its own

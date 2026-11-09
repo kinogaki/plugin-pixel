@@ -199,6 +199,7 @@ impl Renderer {
             rims: self.rims,
             fog: self.fog,
             lights: self.scene.lights,
+            portals: self.scene.portals,
             volumes: self.scene.volumes,
             extent: self.scene.extent(),
         };

@@ -72,6 +72,9 @@ pub struct GpuInstance {
     pub mean: [f32; 4],
     /// rgb: what stands for its mesh's corners' tint; w: their alpha.
     pub tint: [f32; 4],
+    /// The slots of the geometry lights it casts no shadow of, 32 a word
+    /// (`crate::shadowless`).
+    pub shadowless: [u32; 4],
 }
 
 /// Its own color stands for its corners' tint (`id.z`).
@@ -99,6 +102,7 @@ impl GpuInstance {
             to_own: instance.to_own.unwrap_or([[f32::NAN; 4]; 3]),
             id: [instance.id, span.root, own, span.cuts],
             tint: V3::of(instance.tint.unwrap_or_default()).with_w(instance.alpha.unwrap_or(1.0)),
+            shadowless: instance.shadowless,
             ..GpuInstance::default()
         };
         packed.set_surface(surface, atlas);
@@ -192,6 +196,8 @@ pub struct Frame {
     back: [f32; 4],
     ambient: [f32; 4],
     ground: [f32; 4],
+    through: [f32; 4],
+    through_ground: [f32; 4],
     world_up: [f32; 4],
     film: [u32; 4],
     view: [u32; 4],
@@ -219,6 +225,8 @@ pub struct Lighting {
     pub fog: Option<Fog>,
     /// Lights in the light buffer.
     pub lights: u32,
+    /// Portals in the light buffer, after the lights.
+    pub portals: u32,
     /// Volumes, and how many of them cast shadows.
     pub volumes: (u32, u32),
     /// The scene's bounds' diagonal (ray offsets grow with it).
@@ -258,6 +266,8 @@ impl Frame {
             back: v(back, camera.step),
             ambient: rgb(l.ambient.sky, s.ao_distance),
             ground: rgb(l.ambient.ground, f32::from(u8::from(l.ambient.seen))),
+            through: rgb(l.ambient.through_sky, 0.0),
+            through_ground: rgb(l.ambient.through_ground, 0.0),
             world_up: rgb(s.up, 0.0),
             film: [camera.size[0], camera.size[1], s.pixel_size, l.lights],
             view: [
@@ -276,7 +286,7 @@ impl Frame {
             rim_all: rgb(l.rims.all, 0.0),
             fog_color: rgb(fog.color, fog.density),
             fog: [fog.start, fog.height, fog.falloff, fog.anisotropy],
-            ao: [s.ao_strength, s.ao_power, s.ao_direct, 0.0],
+            ao: [s.ao_strength, s.ao_power, s.ao_direct, l.portals as f32],
             gi: [s.gi, s.gi_distance, s.gi_samples as f32, 0.0],
             volume: [
                 s.volume_steps as f32,
@@ -314,6 +324,7 @@ mod tests {
             rims: Rims::default(),
             fog: None,
             lights: 0,
+            portals: 0,
             volumes: (0, 0),
             extent: 0.0,
         };

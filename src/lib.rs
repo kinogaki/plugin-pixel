@@ -26,6 +26,7 @@ pub mod presets;
 pub mod render;
 pub mod sampled;
 pub mod settings;
+pub mod shadowless;
 pub mod sync;
 
 use kinogaki_studio_api::{Package, PackageId};

@@ -117,6 +117,35 @@ pub fn lights() -> DeclaredKind {
     DeclaredKind::lights(LIGHT_KIND, Home::family(), vec![rim_light()])
 }
 
+/// Geometry light `light` (slot `slot`) as Pixel lights by it: a sphere of
+/// its meshes' world area `area` at their area-weighted centre `centre`,
+/// whose power is theirs (π × radiance × area, whichever side faces);
+/// none for a mesh of no area. Its meshes show as their materials.
+pub fn mesh_light(
+    light: &standard::Light,
+    (area, centre): (f32, [f32; 3]),
+    slot: u32,
+) -> Option<Light> {
+    if area.is_nan() || area <= 0.0 {
+        return None;
+    }
+    let radius = (area / (4.0 * std::f32::consts::PI)).sqrt();
+    let [x, y, z] = centre;
+    Some(Light {
+        shape: LightShape::Sphere {
+            radius,
+            point: false,
+        },
+        radiance: light.radiance().map(|c| c * light.diffuse.max(0.0)),
+        normalize: light.normalize,
+        rows: [[1.0, 0.0, 0.0, x], [0.0, 1.0, 0.0, y], [0.0, 0.0, 1.0, z]],
+        gobo: None,
+        shaping: None,
+        shadow: Shadow::default(),
+        slot,
+    })
+}
+
 /// The color a rim's emission makes, × intensity × 2^exposure (a standard
 /// light's is [`standard::Light::radiance`]).
 pub fn emitted(prim: &Declared) -> [f32; 3] {
@@ -152,6 +181,7 @@ pub fn gobo(prim: &Declared) -> Option<Gobo> {
 pub fn light_of(
     prim: &Declared,
     texture: &dyn Fn(&str) -> Option<TextureImage>,
+    slot: u32,
 ) -> Option<(Light, Option<Glow>)> {
     let light = standard::Light::decode(prim)?;
     let mut radiance = light.radiance();
@@ -198,7 +228,9 @@ pub fn light_of(
             )
         }
         standard::LightShape::Distant { angle } => (LightShape::Distant { angle }, None),
-        standard::LightShape::Dome { .. } => return None,
+        standard::LightShape::Dome { .. }
+        | standard::LightShape::Portal { .. }
+        | standard::LightShape::Geometry { .. } => return None,
     };
     let shaping = light.shaping.as_ref().map(|s| {
         let cone = s.cone_angle.clamp(0.0, 180.0).to_radians();
@@ -227,6 +259,7 @@ pub fn light_of(
         gobo: gobo(prim),
         shaping,
         shadow,
+        slot,
     };
     let over = match light.normalize {
         true => 1.0 / light.area().unwrap_or(1.0).max(f32::MIN_POSITIVE),
@@ -291,6 +324,7 @@ pub fn rim_all_round(prim: &Declared) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shadowless::NO_SLOT;
 
     fn declared(ty: &PrimType, values: &[(&str, Value)]) -> Declared {
         let mut prim = Declared::new(ty.id, ty.schema().values());
@@ -313,13 +347,15 @@ mod tests {
                 standard::CYLINDER_LIGHT,
                 standard::DISTANT_LIGHT,
                 standard::DOME_LIGHT,
+                standard::PORTAL_LIGHT,
+                standard::GEOMETRY_LIGHT,
                 RIM_LIGHT
             ]
         );
         let gobo_of = |t: &PrimType| t.schema().parameters().any(|d| &*d.name == "goboScale");
         assert_eq!(
             types.iter().map(gobo_of).collect::<Vec<_>>(),
-            [false, false, true, false, true, false, false]
+            [false, false, true, false, true, false, false, false, false]
         );
         // Off by default, decoded when on.
         let spot = declared(&types[2], &[]);
@@ -353,20 +389,20 @@ mod tests {
             ..standard::Light::default()
         };
         let none = |_: &str| None;
-        let (light, glow) = light_of(&sphere(false, false).declared(), &none).unwrap();
+        let (light, glow) = light_of(&sphere(false, false).declared(), &none, NO_SLOT).unwrap();
         assert_eq!(
             (light.radiance, glow),
             ([1.0; 3], None),
             "Diffuse on the light alone"
         );
-        let (_, glow) = light_of(&sphere(true, false).declared(), &none).unwrap();
+        let (_, glow) = light_of(&sphere(true, false).declared(), &none, NO_SLOT).unwrap();
         let glow = glow.unwrap();
         assert_eq!(
             (glow.mesh, glow.radiance, glow.to_world[0][0]),
             (GlowMesh::Sphere, [2.0; 3], 1.0)
         );
         // Normalized, it shines its power over its area, 4π r².
-        let (_, glow) = light_of(&sphere(true, true).declared(), &none).unwrap();
+        let (_, glow) = light_of(&sphere(true, true).declared(), &none, NO_SLOT).unwrap();
         assert!((glow.unwrap().radiance[0] - 2.0 / std::f32::consts::PI).abs() < 1e-6);
         // A point shows nothing; a rect's color map tints both by its mean.
         let point = standard::Light {
@@ -376,7 +412,7 @@ mod tests {
             },
             ..sphere(true, false)
         };
-        assert_eq!(light_of(&point.declared(), &none).unwrap().1, None);
+        assert_eq!(light_of(&point.declared(), &none, NO_SLOT).unwrap().1, None);
         let map = {
             use kinogaki_render_api::geometry::image::{
                 Decoding, Encoding, Format, Image, Rect, Sample,
@@ -394,7 +430,7 @@ mod tests {
             ..standard::Light::default()
         };
         let mapped = |row: &str| (row == "texture").then(|| map.clone());
-        let (light, glow) = light_of(&rect.declared(), &mapped).unwrap();
+        let (light, glow) = light_of(&rect.declared(), &mapped, NO_SLOT).unwrap();
         assert_eq!(
             (light.radiance, glow.unwrap().radiance),
             ([0.5, 0.0, 0.5], [0.5, 0.0, 0.5])

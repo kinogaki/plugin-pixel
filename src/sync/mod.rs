@@ -26,8 +26,12 @@
 //!   at most [`MAX_PICTURE`](pictures::MAX_PICTURE) texels: [`pictures`]), each corner reading the
 //!   coordinates its primvar holds.
 //! - **Declared prims** become lights: the domes add up into the ambient
-//!   light (a ground color below the horizon), the rims by their side, the
-//!   first visible fog is the fog.
+//!   light (a ground color below the horizon; those a portal names apart,
+//!   counted through their portals), the rims by their side, the first
+//!   visible fog is the fog; a geometry light lights as a sphere of its
+//!   meshes' area at their centre, each geometry light a slot and each
+//!   instance the mask of those it casts no shadow of
+//!   ([`crate::shadowless`]), read before the instances are placed.
 //!
 //! A material's new colors rewrite the instances' surfaces alone; a new
 //! kind of material, a new color attribute, or a cutout set or cleared,
@@ -38,16 +42,15 @@
 //! What it can't render as sent it says ([`Sync::problems`]): volumes past
 //! [`MAX_VOLUMES`], an Instancer placing itself (a cycle a later change can
 //! make: it places nothing there), a material node it doesn't declare.
+mod declared;
+
 use crate::gpu::Changed;
 use crate::gpu::MAX_VOLUMES;
-use crate::lights::{self, RIM_LIGHT};
 use crate::nodes::{self, Look, Material};
 use crate::pictures;
-use crate::render::{
-    Ambient, Corners, Fog, Instance, Mesh, Picture, Rims, Scene, Surface, Texture, Volume,
-};
+use crate::render::{Corners, Instance, Mesh, Picture, Scene, Surface, Texture, Volume};
+use crate::shadowless::Shadowless;
 use kinogaki_render_api::geometry::{Diagnostic, Vec3, Xform, names};
-use kinogaki_render_api::standard::{self, LightShape as LightKind};
 use kinogaki_render_api::{
     Dirty, Instancer, Prim, PrimId, SceneSettings, SceneUpdate, Shape, Topology, ViewCamera,
 };
@@ -69,6 +72,8 @@ pub struct Sync {
     made: BTreeMap<(PrimId, Instead), Arc<Made>>,
     settings: SceneSettings,
     scene: Scene,
+    /// The geometry lights, which their meshes cast no shadow of.
+    shadowless: Shadowless,
     /// What it can't render as sent, by what found it.
     problems: Problems,
 }
@@ -78,6 +83,7 @@ pub struct Sync {
 struct Problems {
     geometry: Vec<Diagnostic>,
     materials: Vec<Diagnostic>,
+    lights: Vec<Diagnostic>,
 }
 
 /// Three rows of `x` in single precision.
@@ -142,7 +148,7 @@ impl Sync {
     /// What it can't render as sent, each said once.
     pub fn problems(&self) -> Vec<Diagnostic> {
         let p = &self.problems;
-        [&p.geometry, &p.materials]
+        [&p.geometry, &p.materials, &p.lights]
             .into_iter()
             .flatten()
             .cloned()
@@ -183,6 +189,16 @@ impl Sync {
             touched.declared = true;
         }
         let mut changed = Changed::default();
+        if touched.declared {
+            let declared = self.prims.iter().filter_map(|(id, prim)| match prim {
+                Prim::Declared(d) => Some((*id, d)),
+                _ => None,
+            });
+            let shadowless = Shadowless::of(declared);
+            // Which shadows an instance casts is its own: placed again.
+            touched.shapes |= shadowless != self.shadowless;
+            self.shadowless = shadowless;
+        }
         if touched.materials {
             let (remake, moved) = self.read_materials();
             self.made.retain(|_, made| !made.reads(&remake));
@@ -419,6 +435,8 @@ impl Sync {
         };
         let key = (id, instead);
         let (to_world, to_own) = (rows(at), at.inverse().map(|back| rows(&back)));
+        // The prim placing it: the outermost Instancer, else the shape.
+        let shadowless = (self.shadowless).mask(chain.first().map_or(id, |(on, ..)| *on));
         for (material, mesh) in &made.meshes {
             let index = *placed.index.entry(Arc::as_ptr(mesh)).or_insert_with(|| {
                 placed.meshes.push(mesh.clone());
@@ -444,6 +462,7 @@ impl Sync {
                 id: object,
                 tint,
                 alpha,
+                shadowless,
             });
         }
         for (material, corners) in &made.volumes {
@@ -521,60 +540,6 @@ impl Sync {
                 volume.medium = medium;
             }
         }
-    }
-
-    /// The lights, domes, rims and fog again.
-    fn read_lights(&mut self) {
-        let (mut lights, mut ambient, mut rims, mut fog) =
-            (Vec::new(), Ambient::default(), Rims::default(), None);
-        let mut glows = Vec::new();
-        for prim in self.prims.values() {
-            let Prim::Declared(prim) = prim else {
-                continue;
-            };
-            if let Some(standard) = standard::Fog::decode(prim) {
-                fog = fog.or_else(|| Some(fog_of(standard)));
-                continue;
-            }
-            if prim.type_id == RIM_LIGHT {
-                let side = if lights::rim_all_round(prim) {
-                    &mut rims.all
-                } else {
-                    &mut rims.lit
-                };
-                add(side, lights::emitted(prim));
-                continue;
-            }
-            let Some(light) = standard::Light::decode(prim) else {
-                continue;
-            };
-            if let LightKind::Dome { ground, .. } = light.shape {
-                let radiance = light.radiance().map(|c| c * light.diffuse.max(0.0));
-                add(&mut ambient.sky, radiance);
-                let scale = light.intensity * light.exposure.exp2() * light.diffuse.max(0.0);
-                add(
-                    &mut ambient.ground,
-                    ground.map_or(radiance, |g| g.map(|c| c * scale)),
-                );
-                ambient.seen |= light.camera;
-                continue;
-            }
-            let texture = |name: &str| match self.prims.get(&prim.textures.get(name)?.prim()) {
-                Some(Prim::Texture(read)) => Some(read.clone()),
-                _ => None,
-            };
-            if let Some((light, glow)) = lights::light_of(prim, &texture) {
-                lights.push(light);
-                glows.extend(glow);
-            }
-        }
-        (
-            self.scene.lights,
-            self.scene.glows,
-            self.scene.ambient,
-            self.scene.rims,
-            self.scene.fog,
-        ) = (lights, glows, ambient, rims, fog);
     }
 
     /// The camera `camera` names, as the renderer takes it (none: a prim it
@@ -697,11 +662,6 @@ fn same_meshes(a: &[Arc<Mesh>], b: &[Arc<Mesh>]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
 }
 
-/// Adds `b` into `a`.
-fn add(a: &mut [f32; 3], b: [f32; 3]) {
-    *a = std::array::from_fn(|k| a[k] + b[k]);
-}
-
 /// A volume of `shape`'s triangles `corners` (world space) placed by `at`.
 fn volume(
     shape: &Shape,
@@ -722,18 +682,5 @@ fn volume(
         own_bounds: (lo, hi),
         scale: at.axes().map(|a| a.length() as f32),
         medium,
-    }
-}
-
-/// The standard fog `fog` as Pixel renders it.
-fn fog_of(fog: standard::Fog) -> Fog {
-    Fog {
-        color: fog.color,
-        density: fog.density,
-        start: fog.start,
-        height: fog.height,
-        falloff: fog.falloff,
-        lit: fog.inscatter,
-        anisotropy: fog.anisotropy,
     }
 }
