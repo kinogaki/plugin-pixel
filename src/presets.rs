@@ -2,6 +2,7 @@
 //! the menus list them under Pixel.
 use crate::nodes::{SURFACE, VOLUME};
 use kinogaki_render_api::value::Value;
+use kinogaki_studio_api::menu::Home;
 use kinogaki_studio_api::network::{NewNode, NodeCreation};
 use kinogaki_studio_api::render::material_creation;
 use kinogaki_studio_api::{CreationId, NodeTypeId};
@@ -86,7 +87,13 @@ pub fn creations() -> Vec<NodeCreation> {
             for (name, value) in preset.values {
                 inside = inside.with(*name, value.clone());
             }
-            material_creation(preset.id, preset.label, "Pixel", preset.aliases, inside)
+            material_creation(
+                preset.id,
+                preset.label,
+                Home::family(),
+                preset.aliases,
+                inside,
+            )
         })
         .collect()
 }

@@ -1,15 +1,19 @@
-//! Pixel's lights and fog: the prim types it declares and its object kinds
-//! of them, and what each prim lights a frame with.
+//! Pixel's lights and fog: the prim types it declares, its object kind of
+//! the one light only it has, and what each prim lights a frame with.
 //!
-//! - **Lights** (`kinogaki.pixel.light`, placed): UsdLux's standard rect,
-//!   disk, cylinder and dome lights; its distant and sphere lights, the standard ones
-//!   with a **Gobo** section (a mask of dappled light, as if through leaves
-//!   out of frame); and the **Rim Light** (`kinogaki.pixel.rim_light`), a
-//!   Fresnel-like edge, (1 − n·v)⁴ × its emission, added where direct light
-//!   reaches a surface (Lit) or all round (All), with no place or direction.
-//! - **Fog** (`kinogaki.pixel.fog`, at the root): the standard exponential
-//!   height fog, flat, or lit by the lights and marched with the volumes
-//!   when In-scatter is on.
+//! - **Standard lights** (core's objects, `kinogaki.core.light`, offered
+//!   under Render while an engine renders them): UsdLux's rect, disk,
+//!   cylinder and dome lights; its distant and sphere lights, the standard
+//!   ones with a **Gobo** section (a mask of dappled light, as if through
+//!   leaves out of frame), which core's lights of those types show while
+//!   Pixel is installed.
+//! - **Rim Light** (`kinogaki.pixel.rim_light`, Pixel's own kind
+//!   `kinogaki.pixel.light`, in its family): a Fresnel-like edge,
+//!   (1 − n·v)⁴ × its emission, added where direct light reaches a surface
+//!   (Lit) or all round (All), with no place or direction.
+//! - **Fog** (core's object, `kinogaki.core.fog`): the standard
+//!   exponential height fog, flat, or lit by the lights and marched with the
+//!   volumes when In-scatter is on.
 //!
 //! Emissions become colors here, at luminance 1 (the SDK's
 //! [`Emission::color`]): Pixel renders in RGB. A standard light becomes
@@ -23,12 +27,11 @@ use kinogaki_render_api::standard::{self, Emission};
 use kinogaki_render_api::value::{Choice, Condition, Number, Schema, Value, ValueKind};
 use kinogaki_render_api::{Declared, Parameter, PrimType, PrimTypeId, Role, Section};
 use kinogaki_studio_api::ObjectKindId;
+use kinogaki_studio_api::menu::Home;
 use kinogaki_studio_api::render::lights::DeclaredKind;
 
-/// The Light kind's id.
+/// The Rim Light kind's id.
 pub const LIGHT_KIND: ObjectKindId = ObjectKindId::declared("kinogaki.pixel.light");
-/// The Fog kind's id.
-pub const FOG_KIND: ObjectKindId = ObjectKindId::declared("kinogaki.pixel.fog");
 /// The rim light's type.
 pub const RIM_LIGHT: PrimTypeId = PrimTypeId::declared("kinogaki.pixel.rim_light");
 
@@ -109,14 +112,9 @@ pub fn light_types() -> Vec<PrimType> {
         .collect()
 }
 
-/// Pixel's lights, as a placed kind.
+/// Pixel's own light, the Rim Light, as a placed kind in its family.
 pub fn lights() -> DeclaredKind {
-    DeclaredKind::lights(LIGHT_KIND, "Pixel Lights", light_types())
-}
-
-/// Pixel's fog, at the root.
-pub fn fog() -> DeclaredKind {
-    DeclaredKind::atmosphere(FOG_KIND, standard::fog())
+    DeclaredKind::lights(LIGHT_KIND, Home::family(), vec![rim_light()])
 }
 
 /// The color a rim's emission makes, × intensity × 2^exposure (a standard

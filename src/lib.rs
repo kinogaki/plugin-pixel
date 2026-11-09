@@ -11,7 +11,8 @@
 //! space placed by instances and the rest in world space; film, camera, the
 //! two levels of BVH, dither) and [`gpu`] (the passes and their shaders). The plugin around it: the package, the engine's
 //! [`description`] and [`settings`], its material [`nodes`] and starting
-//! materials ([`presets`]), its [`lights`] and fog, its [`outputs`], scene
+//! materials ([`presets`]), its [`lights`] (the standard ones it renders
+//! and fog are core's objects; its Rim Light its own), its [`outputs`], scene
 //! [`sync`] with the [`pictures`] textures become, and the render thread
 //! ([`engine`]).
 pub mod description;
@@ -29,12 +30,11 @@ pub mod sync;
 
 use kinogaki_studio_api::{Package, PackageId};
 
-/// Pixel's package: the engine with its material nodes, its lights and its
-/// fog, and its starting materials.
+/// Pixel's package: the engine with its material nodes and its Render
+/// Output, its Rim Light, and its starting materials, each in its family.
 pub fn package() -> Package {
     let package = Package::new(PackageId::declared("kinogaki.pixel"), "Pixel")
         .with_engine(engine::Pixel)
-        .with_object_kind(lights::lights())
-        .with_object_kind(lights::fog());
+        .with_object_kind(lights::lights());
     (presets::creations().into_iter()).fold(package, Package::with_creation)
 }
